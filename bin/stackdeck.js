@@ -17,8 +17,6 @@ const os = require("os");
 const { spawn, execFileSync } = require("child_process");
 
 const SERVER = path.join(__dirname, "..", "server.js");
-const PORT = Number(process.env.STACKDECK_PORT || 8899);
-const BASE = `http://127.0.0.1:${PORT}`;
 
 // The API requires the per-install secret; same-user processes read it from disk.
 function stateHome() {
@@ -30,8 +28,21 @@ function stateHome() {
 const token = () => { try { return fs.readFileSync(path.join(stateHome(), "secret"), "utf8").trim(); } catch { return ""; } };
 const authHeaders = () => ({ "X-Stackdeck-Token": token() });
 
+// Same port resolution as the daemon: env override, else config, else default.
+function resolvePort() {
+  const env = Number(process.env.STACKDECK_PORT);
+  if (Number.isInteger(env) && env >= 1 && env <= 65535) return env;
+  try {
+    const p = JSON.parse(fs.readFileSync(path.join(stateHome(), "config.json"), "utf8")).port;
+    if (Number.isInteger(p) && p >= 1 && p <= 65535) return p;
+  } catch {}
+  return 8899;
+}
+const PORT = resolvePort();
+const BASE = `http://127.0.0.1:${PORT}`;
+
 async function up() {
-  try { const r = await fetch(`${BASE}/api/meta`); return r.ok; } catch { return false; }
+  try { const r = await fetch(`${BASE}/api/ping`); return r.ok; } catch { return false; }
 }
 
 async function ensureDaemon() {
@@ -75,7 +86,9 @@ function openBrowser(url) {
   }
   if (cmd === "status") {
     await ensureDaemon();
-    const d = await (await fetch(`${BASE}/api/services`, { headers: authHeaders() })).json();
+    const r = await fetch(`${BASE}/api/services`, { headers: authHeaders() });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { console.error("error:", d.error || r.statusText); process.exit(1); }
     for (const s of d.services) {
       const state = s.running ? (s.managed ? "up" : "up (external)") : "down";
       console.log(`${s.running ? "●" : "○"} ${s.name.padEnd(16)} ${state.padEnd(14)} :${s.port ?? "—"}  ${s.branch ?? ""}`);

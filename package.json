@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Your projects folder, as a control panel. Browser dashboard to start, stop, and organize local dev services — git-branch aware, zero dependencies.",
   "license": "MIT",
-  "author": "bharanishraj",
+  "author": "beingmechon",
   "bin": { "stackdeck": "bin/stackdeck.js" },
   "main": "server.js",
   "files": ["server.js", "index.html", "bin/", "scripts/"],
@@ -13,5 +13,5 @@
   "engines": { "node": ">=18" },
   "os": ["darwin", "linux"],
   "keywords": ["process-manager", "dev-server", "dashboard", "local-development", "git", "procfile", "hotel"],
-  "repository": { "type": "git", "url": "https://github.com/bharanishraj/stackdeck" }
+  "repository": { "type": "git", "url": "https://github.com/beingmechon/stackdeck" }
 }

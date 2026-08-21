@@ -351,7 +351,10 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
-// Escapes quotes too — values land inside HTML attributes and inline handlers.
+// HTML/attribute escaping. NOTE: this is NOT protection inside inline
+// onclick handlers (the HTML parser decodes entities before JS parses) —
+// there, safety comes from server-side name validation ([A-Za-z0-9._-] only)
+// or the encodeURIComponent/decodeURIComponent pattern used for free text.
 function esc(s){ return String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 // Shorten a path with the real home dir from /api/meta (never a guessed prefix).
 function shortP(p){ return meta && meta.home && p.startsWith(meta.home) ? "~" + p.slice(meta.home.length) : p; }

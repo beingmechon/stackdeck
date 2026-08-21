@@ -50,7 +50,15 @@ function resolveHome() {
 const HOME_DIR = resolveHome();
 const CONFIG_PATH = path.join(HOME_DIR, "config.json");
 const LOG_DIR = path.join(HOME_DIR, "logs");
-fs.mkdirSync(LOG_DIR, { recursive: true });
+// 0700: config holds env vars (often API keys) and logs hold whatever
+// services print — none of it is for other users on a shared machine.
+fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(HOME_DIR, 0o700); fs.chmodSync(LOG_DIR, 0o700); } catch {}
+
+// Names end up in log-file paths and in the UI's inline handlers — the strict
+// charset (enforced at API *and* load time) is a security invariant, not taste.
+const validSvcName = (n) => typeof n === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(n);
+const validLabel = (n) => typeof n === "string" && n.length >= 1 && n.length <= 64 && !/[<>"'\\\/\n]/.test(n);
 
 // A corrupt config must not brick the daemon: set it aside and start fresh.
 let cfg = {};
@@ -68,17 +76,22 @@ if (fs.existsSync(CONFIG_PATH)) {
 // Normalize every field we index into; old or hand-edited configs stay safe.
 cfg.port = Number.isInteger(cfg.port) && cfg.port >= 1 && cfg.port <= 65535 ? cfg.port : 8899;
 cfg.services = Array.isArray(cfg.services)
-  ? cfg.services.filter((s) => s && typeof s === "object" && typeof s.name === "string") : [];
-cfg.groups = Array.isArray(cfg.groups) ? cfg.groups : [];
+  ? cfg.services.filter((s) => {
+      const ok = s && typeof s === "object" && validSvcName(s.name);
+      if (!ok && s && s.name) console.error(`dropping service with invalid name from config: ${JSON.stringify(s.name)}`);
+      return ok;
+    }) : [];
+cfg.groups = Array.isArray(cfg.groups) ? cfg.groups.filter(validLabel) : [];
 cfg.projectRoots = Array.isArray(cfg.projectRoots) && cfg.projectRoots.length ? cfg.projectRoots : ["~/Projects"];
 
 // Atomic write: a crash mid-save must never truncate the config.
 const saveCfg = () => {
   const tmp = `${CONFIG_PATH}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
   fs.renameSync(tmp, CONFIG_PATH);
 };
 if (!fs.existsSync(CONFIG_PATH)) saveCfg();
+try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {} // tighten pre-existing files too
 
 const findSvc = (name) => cfg.services.find((s) => s.name === name);
 const svcDir = (s) => expand(s.dir);
@@ -105,17 +118,34 @@ function tokenOk(t) {
 /* ---------- environment for spawned services ---------- */
 
 // GUI launches (Finder, systemd user units) hand daemons a bare PATH with no
-// nvm/homebrew/uv. Resolve the user's interactive-shell PATH once, so spawned
-// services see the same toolchain the user's terminal does.
-function resolveShellPath() {
-  try {
-    const shell = process.env.SHELL || "/bin/bash";
-    const out = execFileSync(shell, ["-lc", "printf %s \"$PATH\""], { timeout: 8000 }).toString().trim();
-    if (out.split(":").length > 3) return out;
-  } catch {}
-  return process.env.PATH;
-}
-const SHELL_PATH = resolveShellPath();
+// nvm/homebrew/uv. We want the user's interactive-shell PATH — that's where
+// version managers initialize (.zshrc/.bashrc; plain -lc never reads them,
+// and a login-only PATH can rank a stale system toolchain first).
+//
+// Resolution is ASYNC with a disk cache: an interactive shell under launchd
+// can hang until its timeout, and the daemon must never block startup on it.
+const { execFile } = require("child_process");
+const SHELLPATH_CACHE = path.join(HOME_DIR, "shellpath");
+let SHELL_PATH = process.env.PATH;
+try {
+  const cached = fs.readFileSync(SHELLPATH_CACHE, "utf8").trim();
+  if (cached.split(":").length > 3) SHELL_PATH = cached;
+} catch {}
+(function refreshShellPath(i = 0) {
+  const shell = process.env.SHELL || "/bin/bash";
+  const flags = ["-ilc", "-lc"];
+  if (i >= flags.length) return;
+  // Interactive shells print noise (macOS "Restored session: …"), so the
+  // value is fenced with markers instead of trusting raw stdout.
+  execFile(shell, [flags[i], 'printf "__SD__%s__SD__" "$PATH"'], { timeout: 8000 }, (err, out) => {
+    const m = (out || "").toString().match(/__SD__([^]*?)__SD__/);
+    if (m && m[1].split(":").length > 3) {
+      SHELL_PATH = m[1];
+      for (const k of Object.keys(WHICH_CACHE)) delete WHICH_CACHE[k]; // re-detect tools with the real PATH
+      try { fs.writeFileSync(SHELLPATH_CACHE, SHELL_PATH + "\n", { mode: 0o600 }); } catch {}
+    } else refreshShellPath(i + 1);
+  });
+})();
 
 /* ---------- helpers ---------- */
 
@@ -127,18 +157,38 @@ function git(dir, ...args) {
   }
 }
 
+// One lsof/ss call covering ALL listeners, cached ~2.5s — the UI polls every
+// service's port every 5s, and per-port subprocess spawns block the event loop.
+let portCache = { t: 0, map: new Map() };
+function listeningMap() {
+  if (Date.now() - portCache.t < 2500) return portCache.map;
+  const map = new Map();
+  try { // macOS + most Linux
+    const out = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], { timeout: 4000 }).toString();
+    let pid = null;
+    for (const line of out.split("\n")) {
+      if (line.startsWith("p")) pid = Number(line.slice(1));
+      else if (line.startsWith("n")) {
+        const m = line.match(/:(\d+)$/);
+        if (m && pid && !map.has(Number(m[1]))) map.set(Number(m[1]), pid);
+      }
+    }
+  } catch {
+    try { // Linux fallback (iproute2)
+      const out = execFileSync("ss", ["-ltnpH"], { timeout: 4000 }).toString();
+      for (const line of out.split("\n")) {
+        const m = line.match(/[:\]](\d+)\s.*pid=(\d+)/);
+        if (m && !map.has(Number(m[1]))) map.set(Number(m[1]), Number(m[2]));
+      }
+    } catch {}
+  }
+  portCache = { t: Date.now(), map };
+  return map;
+}
+const bustPortCache = () => { portCache.t = 0; };
 function portPid(port) {
   if (!port) return null;
-  try { // macOS + most Linux
-    const out = execFileSync("lsof", ["-tnP", `-iTCP:${port}`, "-sTCP:LISTEN"], { timeout: 4000 }).toString().trim();
-    if (out) return Number(out.split("\n")[0]);
-  } catch {}
-  try { // Linux fallback (iproute2)
-    const out = execFileSync("ss", ["-ltnpH", `sport = :${port}`], { timeout: 4000 }).toString();
-    const m = out.match(/pid=(\d+)/);
-    if (m) return Number(m[1]);
-  } catch {}
-  return null;
+  return listeningMap().get(Number(port)) ?? null;
 }
 
 const MAX_BUF = 2000;
@@ -146,14 +196,43 @@ const procs = {};   // name -> { child, startedAt, branch }
 const buffers = {}; // name -> [lines]
 const clients = {}; // name -> Set<res> (SSE)
 
+/* Pids persist to disk so a restarted daemon re-adopts services it started
+   (children are detached on purpose: killing the daemon must not kill your
+   dev servers). Adopted services can't stream logs, but show as running and
+   can be killed — same as any external process, minus the guesswork. */
+const PROCS_PATH = path.join(HOME_DIR, "procs.json");
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+let adopted = {};
+try {
+  const saved = JSON.parse(fs.readFileSync(PROCS_PATH, "utf8"));
+  for (const [n, v] of Object.entries(saved))
+    if (v && Number.isInteger(v.pid) && alive(v.pid)) adopted[n] = v;
+} catch {}
+function saveProcs() {
+  const live = {};
+  for (const [n, p] of Object.entries(procs))
+    if (p.child.exitCode === null && p.child.pid) live[n] = { pid: p.child.pid, startedAt: p.startedAt, branch: p.branch };
+  for (const [n, v] of Object.entries(adopted)) if (!(n in live) && alive(v.pid)) live[n] = v;
+  try { fs.writeFileSync(PROCS_PATH, JSON.stringify(live, null, 2) + "\n", { mode: 0o600 }); } catch {}
+}
+function adoptedPid(name) {
+  const a = adopted[name];
+  if (!a) return null;
+  if (alive(a.pid)) return a.pid;
+  delete adopted[name];
+  return null;
+}
+
 // Disk logs: one append stream per service, rotated at 5MB (one .1 backup) so
 // a chatty service can't eat the disk.
 const logStreams = {};
 const logWrites = {};
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 function logStream(name) {
-  if (!logStreams[name])
-    logStreams[name] = fs.createWriteStream(path.join(LOG_DIR, `${name}.log`), { flags: "a" });
+  if (!logStreams[name]) {
+    logStreams[name] = fs.createWriteStream(path.join(LOG_DIR, `${name}.log`), { flags: "a", mode: 0o600 });
+    logStreams[name].on("error", () => { delete logStreams[name]; }); // disk full etc. must not kill the daemon
+  }
   return logStreams[name];
 }
 function maybeRotate(name) {
@@ -176,22 +255,33 @@ function pushLog(name, chunk) {
   logStream(name).write(chunk);
   if ((logWrites[name] = (logWrites[name] || 0) + 1) % 500 === 0) maybeRotate(name);
   for (const res of clients[name] || []) {
-    for (const l of lines) res.write(`data: ${JSON.stringify(l)}\n\n`);
+    try { for (const l of lines) res.write(`data: ${JSON.stringify(l)}\n\n`); } catch {}
   }
+}
+
+// Git state per directory, cached ~10s: three synchronous git spawns per
+// service per 5s poll would stall the event loop (and every SSE stream).
+const gitCache = new Map(); // dir -> { t, isGit, branch, branches, dirty }
+function gitInfo(dir) {
+  const c = gitCache.get(dir);
+  if (c && Date.now() - c.t < 10000) return c;
+  const isGit = fs.existsSync(path.join(dir, ".git"));
+  const info = { t: Date.now(), isGit, branch: null, branches: [], dirty: false };
+  if (isGit) {
+    info.branch = gitBranchFast(dir) || "(detached)";
+    info.branches = (git(dir, "for-each-ref", "refs/heads", "--format=%(refname:short)").out || "").split("\n").filter(Boolean);
+    info.dirty = (git(dir, "status", "--porcelain").out || "") !== "";
+  }
+  gitCache.set(dir, info);
+  return info;
 }
 
 function serviceState(s) {
   const dir = svcDir(s);
   const p = procs[s.name];
   const managedUp = p && p.child.exitCode === null;
-  const pid = managedUp ? p.child.pid : portPid(s.port);
-  const isGit = fs.existsSync(path.join(dir, ".git"));
-  let branch = null, branches = [], dirty = false;
-  if (isGit) {
-    branch = git(dir, "branch", "--show-current").out || "(detached)";
-    branches = (git(dir, "for-each-ref", "refs/heads", "--format=%(refname:short)").out || "").split("\n").filter(Boolean);
-    dirty = (git(dir, "status", "--porcelain").out || "") !== "";
-  }
+  const pid = managedUp ? p.child.pid : (portPid(s.port) ?? adoptedPid(s.name));
+  const g = gitInfo(dir);
   return {
     ...s,
     running: managedUp || pid !== null,
@@ -199,7 +289,7 @@ function serviceState(s) {
     pid,
     startedBranch: p ? p.branch : null,
     startedAt: p ? p.startedAt : null,
-    branch, branches, dirty, isGit,
+    branch: g.branch, branches: g.branches, dirty: g.dirty, isGit: g.isGit,
   };
 }
 
@@ -385,7 +475,7 @@ function scanProjects() {
 
 const DATA_HOME = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "stackdeck");
 const firstDir = (cands) => cands.map(expand).find((c) => c && fs.existsSync(c)) || null;
-const own = (sub) => `mkdir -p ${DATA_HOME}/${sub} && `; // self-initializing data dir
+const own = (sub) => `mkdir -p '${DATA_HOME}/${sub}' && `; // self-initializing data dir (quoted: spaces in $HOME)
 
 const INFRA = () => [
   { name: "postgres", title: "PostgreSQL", bin: "postgres", port: 5432,
@@ -395,14 +485,14 @@ const INFRA = () => [
         "/opt/homebrew/var/postgresql@15", "/opt/homebrew/var/postgresql@14", "/opt/homebrew/var/postgres",
         "/usr/local/var/postgresql@17", "/usr/local/var/postgresql@16", "/usr/local/var/postgres",
         "/var/lib/postgresql/data", "/var/lib/postgres/data"]);
-      return d ? `postgres -D ${d}` : "postgres -D <your-data-dir>  # run initdb first";
+      return d ? `postgres -D '${d}'` : "postgres -D <your-data-dir>  # run initdb first";
     })() },
   { name: "mysql", title: "MySQL", bin: "mysqld", port: 3306, command: "mysqld" },
   { name: "mariadb", title: "MariaDB", bin: "mariadbd", port: 3306, command: "mariadbd" },
   { name: "mongodb", title: "MongoDB", bin: "mongod", port: 27017,
     command: (() => {
       const d = firstDir(["/opt/homebrew/var/mongodb", "/usr/local/var/mongodb", "/var/lib/mongodb"]);
-      return d ? `mongod --dbpath ${d}` : `${own("mongodb")}mongod --dbpath ${DATA_HOME}/mongodb`;
+      return d ? `mongod --dbpath '${d}'` : `${own("mongodb")}mongod --dbpath '${DATA_HOME}/mongodb'`;
     })() },
   { name: "redis", title: "Redis", bin: "redis-server", port: 6379, command: "redis-server" },
   { name: "valkey", title: "Valkey", bin: "valkey-server", port: 6379, command: "valkey-server" },
@@ -411,7 +501,7 @@ const INFRA = () => [
   { name: "opensearch", title: "OpenSearch", bin: "opensearch", port: 9200, command: "opensearch" },
   { name: "rabbitmq", title: "RabbitMQ", bin: "rabbitmq-server", port: 5672, command: "rabbitmq-server" },
   { name: "nats", title: "NATS", bin: "nats-server", port: 4222, command: "nats-server" },
-  { name: "minio", title: "MinIO", bin: "minio", port: 9000, command: `${own("minio")}minio server ${DATA_HOME}/minio` },
+  { name: "minio", title: "MinIO", bin: "minio", port: 9000, command: `${own("minio")}minio server '${DATA_HOME}/minio'` },
   { name: "temporal", title: "Temporal (dev)", bin: "temporal", port: 7233, command: "temporal server start-dev" },
   { name: "clickhouse", title: "ClickHouse", bin: "clickhouse", port: 8123, command: "clickhouse server" },
   { name: "mailpit", title: "Mailpit", bin: "mailpit", port: 8025, command: "mailpit" },
@@ -449,17 +539,24 @@ function startService(s, branch) {
   const dir = svcDir(s);
   if (procs[s.name] && procs[s.name].child.exitCode === null)
     return { code: 409, error: `${s.name} is already running (managed)` };
+  if (adoptedPid(s.name))
+    return { code: 409, error: `${s.name} is already running (from a previous daemon) — Kill it first` };
+  bustPortCache(); // the busy check must not act on stale data
   const busy = portPid(s.port);
   if (busy) return { code: 409, error: `port ${s.port} is busy (pid ${busy}, external) — kill it first` };
   if (!fs.existsSync(dir)) return { code: 400, error: `directory not found: ${dir}` };
 
   if (branch) {
-    const cur = git(dir, "branch", "--show-current").out;
-    if (branch !== cur) {
+    // Only known local branches: a value like "-f" must never reach git argv.
+    const g = gitInfo(dir);
+    if (!g.isGit) return { code: 400, error: "not a git repository" };
+    if (!g.branches.includes(branch)) return { code: 400, error: `unknown branch '${branch}'` };
+    if (branch !== g.branch) {
       if ((git(dir, "status", "--porcelain").out || "") !== "")
         return { code: 409, error: `cannot switch to '${branch}': working tree has uncommitted changes` };
       const co = git(dir, "checkout", branch);
       if (!co.ok) return { code: 500, error: `git checkout ${branch} failed: ${co.out}` };
+      gitCache.delete(dir);
       pushLog(s.name, `[stackdeck] checked out branch '${branch}'\n`);
     }
   }
@@ -481,11 +578,20 @@ function startService(s, branch) {
   });
   child.stdout.on("data", (d) => pushLog(s.name, d));
   child.stderr.on("data", (d) => pushLog(s.name, d));
+  // A spawn 'error' (cwd vanished, bash missing) is an event, not an exception —
+  // unhandled it would take down the whole daemon.
+  child.on("error", (e) => {
+    pushLog(s.name, `[stackdeck] failed to start: ${e.message}\n`);
+    delete procs[s.name];
+    saveProcs();
+  });
   child.on("exit", (code, sig) => {
     pushLog(s.name, `[stackdeck] exited (code=${code} signal=${sig})\n`);
     delete procs[s.name];
+    saveProcs();
   });
   procs[s.name] = { child, startedAt: Date.now(), branch: branch || null };
+  saveProcs();
   pushLog(s.name, `[stackdeck] started: ${s.command} (pid ${child.pid})\n`);
   return { code: 200, ok: true, pid: child.pid };
 }
@@ -502,9 +608,20 @@ function stopService(s) {
     }, 5000).unref();
     return { code: 200, ok: true, stopped: pid };
   }
+  const adPid = adoptedPid(s.name);
+  if (adPid) { // started by a previous daemon instance: we know its group
+    try { process.kill(-adPid, "SIGTERM"); } catch { try { process.kill(adPid, "SIGTERM"); } catch {} }
+    delete adopted[s.name];
+    saveProcs();
+    bustPortCache();
+    pushLog(s.name, `[stackdeck] stopped pid ${adPid} (adopted from a previous daemon)\n`);
+    return { code: 200, ok: true, stopped: adPid, adopted: true };
+  }
+  bustPortCache();
   const ext = portPid(s.port);
   if (ext) {
     try { process.kill(ext, "SIGTERM"); } catch (e) { return { code: 500, error: `kill ${ext} failed: ${e.message}` }; }
+    bustPortCache();
     pushLog(s.name, `[stackdeck] killed external pid ${ext} on port ${s.port}\n`);
     return { code: 200, ok: true, stopped: ext, external: true };
   }
@@ -517,7 +634,8 @@ async function restartService(s) {
   if (r.error && r.code !== 409) return r;
   for (let i = 0; i < 30; i++) { // wait up to ~6s for the port/process to clear
     const p = procs[s.name];
-    if ((!p || p.child.exitCode !== null) && !portPid(s.port)) break;
+    bustPortCache();
+    if ((!p || p.child.exitCode !== null) && !portPid(s.port) && !adoptedPid(s.name)) break;
     await new Promise((ok) => setTimeout(ok, 200));
   }
   return startService(s, wasBranch);
@@ -526,13 +644,20 @@ async function restartService(s) {
 /* ---------- http ---------- */
 
 const MAX_BODY = 1024 * 1024;
+// Collect Buffers and decode ONCE — per-chunk decoding corrupts multi-byte
+// characters (emoji, non-Latin scripts) that land on a chunk boundary.
 const readBody = (req) => new Promise((resolve) => {
-  let b = "";
+  const chunks = [];
+  let len = 0;
   req.on("data", (c) => {
-    b += c;
-    if (b.length > MAX_BODY) { resolve({}); req.destroy(); }
+    chunks.push(c);
+    len += c.length;
+    if (len > MAX_BODY) { resolve({}); req.destroy(); }
   });
-  req.on("end", () => { try { resolve(JSON.parse(b || "{}")); } catch { resolve({}); } });
+  req.on("end", () => {
+    try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch { resolve({}); }
+  });
+  req.on("error", () => resolve({}));
 });
 const validEnv = (v) => v && typeof v === "object" && !Array.isArray(v) &&
   Object.entries(v).every(([k, val]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && typeof val === "string");
@@ -541,10 +666,6 @@ const json = (res, code, obj) => { res.writeHead(code, { "Content-Type": "applic
 const envPort = Number(process.env.STACKDECK_PORT);
 const PORT = Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535 ? envPort : cfg.port;
 const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
-
-// Names are used in log-file paths and rendered in the UI — keep them tame.
-const validSvcName = (n) => typeof n === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(n);
-const validLabel = (n) => typeof n === "string" && n.length >= 1 && n.length <= 64 && !/[<>"'\\\/\n]/.test(n);
 
 // maxHeaderSize: browsers can carry >16KB of localhost cookies from other dev
 // apps, which would hit Node's default header limit and 431 every request.
@@ -572,8 +693,10 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   }
 
   // Everything under /api needs the per-install token (header, or ?t= for
-  // EventSource which cannot set headers). /api/meta stays open as a ping.
-  if (url.pathname.startsWith("/api/") && url.pathname !== "/api/meta") {
+  // EventSource which cannot set headers). Only the bare liveness ping is open.
+  if (req.method === "GET" && url.pathname === "/api/ping")
+    return json(res, 200, { ok: true, version: VERSION });
+  if (url.pathname.startsWith("/api/")) {
     const t = req.headers["x-stackdeck-token"] || url.searchParams.get("t");
     if (!tokenOk(t)) return json(res, 401, { error: "missing or invalid token — reload the page" });
   }
@@ -787,11 +910,15 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     if (!validSvcName(n)) return json(res, 400, { error: "service name must be letters/digits/dot/dash/underscore, max 64 chars" });
     if (n !== name && findSvc(n)) return json(res, 409, { error: "a service with that name already exists" });
     s.name = n;
-    // Carry live runtime state across the rename (works mid-run). The log
-    // stream is closed so future writes open a file under the new name.
+    // Carry live runtime state across the rename (works mid-run). The disk
+    // log follows too, so history doesn't split across two files.
     if (logStreams[name]) { logStreams[name].end(); delete logStreams[name]; }
-    for (const map of [procs, buffers, clients])
-      if (name in map) { map[n] = map[name]; delete map[name]; }
+    if (n !== name) {
+      try { fs.renameSync(path.join(LOG_DIR, `${name}.log`), path.join(LOG_DIR, `${n}.log`)); } catch {}
+      for (const map of [procs, buffers, clients, adopted, logWrites])
+        if (name in map) { map[n] = map[name]; delete map[name]; }
+      saveProcs();
+    }
     saveCfg();
     return json(res, 200, { ok: true });
   }
@@ -816,7 +943,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       b.port = p;
     } else b.port = undefined;
     if (!s) { s = { name: b.name }; cfg.services.push(s); }
-    s.dir = b.dir; s.command = b.command;
+    s.dir = b.dir.trim(); s.command = b.command.trim();
     s.port = b.port;
     s.env = b.env !== undefined ? b.env : (s.env || {});
     if (b.envFile !== undefined) { // false disables .env auto-load; string picks a file
@@ -838,6 +965,9 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     if (!s) return json(res, 404, { error: "unknown service" });
     if (procs[name] && procs[name].child.exitCode === null) return json(res, 409, { error: "stop it first" });
     cfg.services = cfg.services.filter((x) => x.name !== name);
+    logStreams[name]?.end();
+    delete logStreams[name]; delete buffers[name]; delete logWrites[name]; delete adopted[name];
+    saveProcs();
     saveCfg();
     projCache.t = 0; // "configured" flags may have changed
     return json(res, 200, { ok: true });
@@ -853,11 +983,19 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     // a close handler holding the old name would throw on a missing entry.
     const set = (clients[name] = clients[name] || new Set());
     set.add(res);
+    res.on("error", () => set.delete(res)); // client vanished mid-write
     req.on("close", () => set.delete(res));
     return;
   }
 
   json(res, 404, { error: "not found" });
+});
+
+server.on("error", (e) => {
+  console.error(e.code === "EADDRINUSE"
+    ? `port ${PORT} is already in use — is another stackdeck daemon running?`
+    : `server error: ${e.message}`);
+  process.exit(1);
 });
 
 server.listen(PORT, "127.0.0.1", () =>

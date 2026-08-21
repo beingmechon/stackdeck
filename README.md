@@ -16,7 +16,7 @@ neither has.*
 ## Quick start
 
 ```bash
-git clone https://github.com/bharanishraj/stackdeck && cd stackdeck
+git clone https://github.com/beingmechon/stackdeck && cd stackdeck
 node bin/stackdeck.js         # starts the daemon, opens http://localhost:8899
 ```
 
@@ -36,6 +36,8 @@ npm link                     # then: stackdeck | stackdeck status | stackdeck lo
   command + port + env. Start / Kill / restart from the browser or CLI, live
   ANSI-colored logs (also on disk), status by pid *and* port — services
   started outside Stackdeck show as `external` and can be killed too.
+  Killing the daemon never kills your services: pids persist to disk and a
+  restarted daemon re-adopts them (still killable, logs resume on restart).
 - **Git-aware** — a branch dropdown per service; picking a branch runs
   `git checkout` before start, refused while the tree is dirty. Dirty repos
   are badged.
@@ -84,7 +86,8 @@ The daemon executes shell commands by design, and **localhost is not a
 security boundary** — so the API is gated by a per-install secret
 (`<state dir>/secret`, mode 0600). The web page receives the token by being
 served from disk by the daemon itself; the CLI reads it as the same user.
-Every `/api/*` call without it gets a 401.
+Every `/api/*` call without it gets a 401 (only the bare `/api/ping`
+liveness check is open). State files are 0600 in a 0700 directory.
 
 Layered on top: the daemon binds to 127.0.0.1 only, pins the `Host` header
 (DNS-rebinding defense), accepts only `application/json` POSTs (a cross-origin
