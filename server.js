@@ -626,6 +626,45 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     return json(res, 200, { ok: true });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/category") {
+    const { name } = await readBody(req);
+    const n = (name || "").trim();
+    if (!validLabel(n)) return json(res, 400, { error: "category name: 1–64 chars, no quotes/slashes/angle brackets" });
+    cfg.categoryOrder = cfg.categoryOrder || [];
+    if (n === "Uncategorized" || cfg.categoryOrder.includes(n)) return json(res, 409, { error: "category already exists" });
+    cfg.categoryOrder.push(n);
+    saveCfg();
+    projCache.t = 0;
+    return json(res, 200, { ok: true });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/category/delete") {
+    const { name } = await readBody(req);
+    cfg.categoryOrder = (cfg.categoryOrder || []).filter((c) => c !== name);
+    for (const k of Object.keys(cfg.projectCategories || {}))
+      if (cfg.projectCategories[k] === name) delete cfg.projectCategories[k];
+    cfg.hiddenCategories = (cfg.hiddenCategories || []).filter((c) => c !== name);
+    saveCfg();
+    projCache.t = 0;
+    return json(res, 200, { ok: true });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/project/category") {
+    // Assign a project to a category (null/absent = back to Uncategorized).
+    const { name, category } = await readBody(req);
+    if (typeof name !== "string" || !name || name.length > 128) return json(res, 400, { error: "bad project name" });
+    cfg.projectCategories = cfg.projectCategories || {};
+    if (category) {
+      if (!validLabel(category)) return json(res, 400, { error: "bad category name" });
+      cfg.projectCategories[name] = category;
+      cfg.categoryOrder = cfg.categoryOrder || [];
+      if (!cfg.categoryOrder.includes(category)) cfg.categoryOrder.push(category);
+    } else delete cfg.projectCategories[name];
+    saveCfg();
+    projCache.t = 0;
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/service") {
     const b = await readBody(req);
     if (!b.name || !b.dir || !b.command) return json(res, 400, { error: "name, dir, command are required" });

@@ -231,6 +231,7 @@
   <div class="section-label">
     Projects <span class="count" id="proj-count"></span>
     <span style="margin-left:auto; display:flex; gap:4px; align-items:center">
+      <button class="ghost" onclick="addCategory()">+ category</button>
       <button class="ghost" onclick="refreshProjects()" title="rescan project roots for new folders">↻ refresh</button>
       <button class="ghost" onclick="collapseAll('c', true)">collapse all</button>
       <button class="ghost" onclick="collapseAll('c', false)">expand all</button>
@@ -479,6 +480,7 @@ async function delSection(name) {
 /* ---------- projects ---------- */
 
 function projRow(p) {
+  const nArg = `decodeURIComponent('${encodeURIComponent(p.name)}')`;
   const branch = p.isGit
     ? `<span class="badge git" title="current branch">${esc(p.branch || "?")}</span>`
     : '<span class="badge plain">no git</span>';
@@ -488,14 +490,65 @@ function projRow(p) {
   return `
   <div class="row">
     <div class="row-main">
+      <span class="handle" draggable="true" title="drag into one of your categories"
+            ondragstart="projDragStart(event, ${nArg})" ondragend="projDragEnd()">⠿</span>
       <span class="svc-name" style="min-width:200px">${esc(p.name)}</span>
       ${branch}
       ${cmd}
       ${p.configured
         ? '<span class="badge cfgd">configured</span>'
-        : `<button class="add" onclick="configure('${esc(p.name)}')">configure</button>`}
+        : `<button class="add" onclick="configure(${nArg})">configure</button>`}
     </div>
   </div>`;
+}
+
+/* project drag → category assignment */
+let dragProj = null;
+function projDragStart(ev, name) {
+  dragProj = name;
+  ev.dataTransfer.effectAllowed = "move";
+  ev.dataTransfer.setData("text/plain", name);
+  const row = ev.target.closest(".row");
+  ev.dataTransfer.setDragImage(row, 20, 20);
+  setTimeout(() => row.classList.add("dragging"), 0);
+}
+function projDragEnd() {
+  dragProj = null;
+  document.querySelectorAll("#projects .dragging,#projects .drop-into")
+    .forEach(el => el.classList.remove("dragging","drop-into"));
+}
+function catOver(ev) {
+  if (!dragProj) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = "move";
+  ev.currentTarget.classList.add("drop-into");
+}
+function catLeave(ev) { ev.currentTarget.classList.remove("drop-into"); }
+async function catDrop(ev) {
+  ev.preventDefault();
+  ev.currentTarget.classList.remove("drop-into");
+  const cat = ev.currentTarget.dataset.cat || null; // "" = Uncategorized
+  const name = dragProj;
+  projDragEnd();
+  if (!name) return;
+  try {
+    await api("/api/project/category", { name, category: cat });
+    toast(`${name} → ${cat || "Uncategorized"}`);
+  } catch (e) { toast(e.message, true); }
+  await loadMeta();
+  loadProjects(true);
+}
+
+async function addCategory() {
+  const name = prompt("Category name (e.g. Active, Client work, Archive):");
+  if (!name || !name.trim()) return;
+  try { await api("/api/category", { name: name.trim() }); await loadMeta(); loadProjects(true); }
+  catch (e) { toast(e.message, true); }
+}
+async function delCategory(name) {
+  if (!confirm(`Delete category '${name}'? Its projects move to Uncategorized.`)) return;
+  try { await api("/api/category/delete", { name }); await loadMeta(); loadProjects(true); }
+  catch (e) { toast(e.message, true); }
 }
 
 let CAT_ORDER = ["Uncategorized"]; // overridden by config.categoryOrder via /api/meta
@@ -506,26 +559,35 @@ function renderProjects() {
                                      (p.category || "").toLowerCase().includes(q));
   document.getElementById("proj-count").textContent =
     `${projects.length} projects · ${projects.filter(p=>p.isGit).length} git`;
-  if (!shown.length) { $proj.innerHTML = '<div class="ledger"><div class="empty">Nothing matches.</div></div>'; return; }
-  const cats = [...new Set(shown.map(p => p.category || "Uncategorized"))]
-    .sort((a, b) => {
-      const ia = CAT_ORDER.indexOf(a), ib = CAT_ORDER.indexOf(b);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : a > b ? 1 : 0);
-    });
+  if (q && !shown.length) { $proj.innerHTML = '<div class="ledger"><div class="empty">Nothing matches.</div></div>'; return; }
+  // Your categories (in your order) — shown even when empty, so you can drag
+  // into a fresh one — then any others found in data, then Uncategorized.
+  const fromData = [...new Set(shown.map(p => p.category || "Uncategorized"))];
+  const cats = [
+    ...CAT_ORDER.filter(c => c !== "Uncategorized"),
+    ...fromData.filter(c => c !== "Uncategorized" && !CAT_ORDER.includes(c)).sort(),
+    "Uncategorized",
+  ];
   $proj.innerHTML = cats.map(c => {
     const cHidden = hiddenCategories.includes(c);
     if (cHidden && !showHidden) return "";
     const rows = shown.filter(p => (p.category || "Uncategorized") === c);
+    if (q && !rows.length) return ""; // filtering: only categories with matches
     const cArg = `decodeURIComponent('${encodeURIComponent(c)}')`;
     const key = "c:" + c;
     const isClosed = collapsed.has(key) && !q; // an active filter always shows its matches
+    const isUncat = c === "Uncategorized";
     return `<div class="group-block ${cHidden ? "hiddenItem" : ""}">
       <div class="group-head">${chevTitle(key, esc(c), rows.length)}
         <span class="actions">
-          <button class="ghost" onclick="hideItem('category',${cArg},${!cHidden})">${cHidden ? "unhide" : "hide"}</button>
+          ${isUncat ? "" : `<button class="ghost" onclick="hideItem('category',${cArg},${!cHidden})">${cHidden ? "unhide" : "hide"}</button>
+          <button class="ghost" title="delete category (projects move to Uncategorized)" onclick="delCategory(${cArg})">×</button>`}
         </span>
       </div>
-      ${isClosed ? "" : `<div class="ledger">${rows.map(projRow).join("")}</div>`}
+      ${isClosed ? "" : `<div class="ledger" data-cat="${isUncat ? "" : esc(c)}"
+           ondragover="catOver(event)" ondragleave="catLeave(event)" ondrop="catDrop(event)">
+        ${rows.length ? rows.map(projRow).join("") : '<div class="empty">drag projects here</div>'}
+      </div>`}
     </div>`;
   }).join("");
   updateHiddenToggle();
@@ -635,7 +697,7 @@ async function delSvc(name) {
 /* ---------- data loading ---------- */
 
 function editGuard() {
-  if (open.size || dragging) return true;
+  if (open.size || dragging || dragProj) return true;
   const ae = document.activeElement;
   return ae && (ae.closest("#services") || ae.closest("#projects") || ae.id === "filter") &&
          ["SELECT","INPUT","TEXTAREA"].includes(ae.tagName);
