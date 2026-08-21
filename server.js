@@ -146,28 +146,102 @@ function gitBranchFast(dir) {
   } catch { return null; }
 }
 
+/**
+ * Infer how to run a project. Priority: files that encode the author's intent
+ * (bin/dev, Makefile, justfile, Taskfile) → language manifests with their own
+ * toolchain detection → docker-compose as the last resort.
+ */
 function inferCommand(dir) {
   const has = (f) => fs.existsSync(path.join(dir, f));
+  const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
+  const DEV_TARGETS = ["dev", "start", "run", "serve", "up"];
   try {
-    if (has("package.json")) {
-      const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
-      const runner = has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : "npm";
-      if (pkg.scripts && pkg.scripts.dev) return `${runner} run dev`;
-      if (pkg.scripts && pkg.scripts.start) return `${runner} start`;
-    }
+    /* -- author intent ------------------------------------------------ */
+    if (has("bin/dev")) return "bin/dev";                       // Rails 7+ and friends
     if (has("Makefile")) {
-      const mk = fs.readFileSync(path.join(dir, "Makefile"), "utf8");
-      for (const t of ["dev", "start", "run", "serve"]) if (new RegExp(`^${t}:`, "m").test(mk)) return `make ${t}`;
+      const mk = read("Makefile");
+      for (const t of DEV_TARGETS) if (new RegExp(`^${t}:`, "m").test(mk)) return `make ${t}`;
     }
-    if (has("Procfile")) return null; // many processes; let the user pick
-    if (has("pyproject.toml") || has("requirements.txt")) {
-      const py = has("uv.lock") ? "uv run python" : "python3";
-      for (const m of ["main.py", "app.py", "server.py", "run.py", "manage.py"])
-        if (has(m)) return m === "manage.py" ? `${py} manage.py runserver` : `${py} ${m}`;
+    for (const jf of ["justfile", "Justfile", ".justfile"]) if (has(jf)) {
+      const j = read(jf);
+      for (const t of DEV_TARGETS) if (new RegExp(`^${t}[\\s:]`, "m").test(j)) return `just ${t}`;
     }
-    if (has("docker-compose.yml") || has("compose.yml") || has("compose.yaml")) return "docker compose up";
+    for (const tf of ["Taskfile.yml", "Taskfile.yaml", "taskfile.yml"]) if (has(tf)) {
+      const y = read(tf);
+      for (const t of DEV_TARGETS) if (new RegExp(`^  ${t}:`, "m").test(y)) return `task ${t}`;
+    }
+
+    /* -- JavaScript / TypeScript -------------------------------------- */
+    if (has("package.json")) {
+      const pkg = JSON.parse(read("package.json"));
+      const runner =
+        has("bun.lockb") || has("bun.lock") ? "bun" :
+        has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" :
+        has("yarn.lock") ? "yarn" : "npm";
+      for (const s of ["dev", "start", "serve", "develop"])
+        if (pkg.scripts && pkg.scripts[s]) return `${runner} run ${s}`;
+    }
+    for (const dj of ["deno.json", "deno.jsonc"]) if (has(dj)) {
+      const tasks = (JSON.parse(read(dj).replace(/\/\/[^\n]*/g, "")) || {}).tasks || {};
+      for (const t of DEV_TARGETS) if (tasks[t]) return `deno task ${t}`;
+    }
+
+    /* -- Python --------------------------------------------------------
+       Toolchain from lockfiles, entry point from convention. */
+    if (has("pyproject.toml") || has("requirements.txt") || has("Pipfile") || has("setup.py")) {
+      const toml = read("pyproject.toml");
+      const runner =
+        has("uv.lock") ? "uv run" :
+        /\[tool\.poetry\]/.test(toml) ? "poetry run" :
+        has("Pipfile") ? "pipenv run" :
+        has("pdm.lock") ? "pdm run" : null;
+      // A declared console script is the author's entry point — use it.
+      const scriptSec = toml.match(/\[(?:project|tool\.poetry)\.scripts\]\s*\n\s*([A-Za-z0-9_-]+)\s*=/);
+      if (runner && scriptSec) return `${runner} ${scriptSec[1]}`;
+      const py = runner ? `${runner} python` : "python3";
+      if (has("manage.py")) return `${py} manage.py runserver`;   // Django
+      for (const m of ["main.py", "app.py", "server.py", "run.py", "api.py",
+                       "src/main.py", "app/main.py"])
+        if (has(m)) return `${py} ${m}`;
+    }
+
+    /* -- systems & compiled ------------------------------------------- */
     if (has("Cargo.toml")) return "cargo run";
     if (has("go.mod")) return "go run .";
+    if (has("build.zig")) return "zig build run";
+    if (has("Package.swift")) return "swift run";
+    if ([".csproj", ".fsproj"].some((ext) => { try { return fs.readdirSync(dir).some((f) => f.endsWith(ext)); } catch { return false; } }))
+      return "dotnet run";
+
+    /* -- JVM ------------------------------------------------------------ */
+    if (has("gradlew") || has("build.gradle") || has("build.gradle.kts")) {
+      const g = read("build.gradle") + read("build.gradle.kts");
+      const w = has("gradlew") ? "./gradlew" : "gradle";
+      return /spring-boot/.test(g) ? `${w} bootRun` : `${w} run`;
+    }
+    if (has("pom.xml")) {
+      const w = has("mvnw") ? "./mvnw" : "mvn";
+      if (/spring-boot/.test(read("pom.xml"))) return `${w} spring-boot:run`;
+    }
+
+    /* -- Ruby / PHP / Elixir / Dart ------------------------------------ */
+    if (has("Gemfile")) {
+      if (has("config/application.rb")) return "bin/rails server";  // Rails
+      if (has("config.ru")) return "bundle exec rackup";
+    }
+    if (has("artisan")) return "php artisan serve";                 // Laravel
+    if (has("composer.json")) {
+      const scripts = (JSON.parse(read("composer.json")) || {}).scripts || {};
+      for (const t of ["dev", "start", "serve"]) if (scripts[t]) return `composer run ${t}`;
+      if (has("index.php")) return "php -S localhost:8080";
+    }
+    if (has("mix.exs")) return /phoenix/.test(read("mix.exs")) ? "mix phx.server" : "mix run --no-halt";
+    if (has("pubspec.yaml")) return /^\s{2}flutter\s*:/m.test(read("pubspec.yaml")) ? "flutter run" : "dart run";
+    if (has("stack.yaml")) return "stack run";
+
+    /* -- containers last: only when nothing language-level matched ----- */
+    if (has("docker-compose.yml") || has("docker-compose.yaml") || has("compose.yml") || has("compose.yaml"))
+      return "docker compose up";
   } catch {}
   return null;
 }
@@ -222,6 +296,22 @@ function scanProjects() {
 
 /* ---------- actions ---------- */
 
+// Minimal .env parser: KEY=value lines, optional `export `, quotes stripped,
+// #-comments ignored. No interpolation — this is a loader, not a shell.
+function parseEnvFile(file) {
+  const out = {};
+  try {
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!m || m[2].startsWith("#")) continue;
+      let v = m[2];
+      const q = v.match(/^(['"])(.*?)\1/); // quoted value; anything after the close quote is ignored
+      out[m[1]] = q ? q[2] : v.replace(/\s+#.*$/, "");
+    }
+  } catch {}
+  return out;
+}
+
 function startService(s, branch) {
   const dir = svcDir(s);
   if (procs[s.name] && procs[s.name].child.exitCode === null)
@@ -241,11 +331,18 @@ function startService(s, branch) {
     }
   }
 
+  // Env precedence: daemon env < <dir>/.env (auto-loaded; set envFile:false
+  // to skip, or a path to use a different file) < the service's own env.
+  const envFile = s.envFile === false ? null : path.join(dir, s.envFile || ".env");
+  const fileEnv = envFile && fs.existsSync(envFile) ? parseEnvFile(envFile) : {};
+  const n = Object.keys(fileEnv).length;
+  if (n) pushLog(s.name, `[devboard] loaded ${path.basename(envFile)} (${n} vars)\n`);
+
   // Non-login, non-interactive shell: inherits the daemon's resolved PATH and
   // avoids surprises from profile files reordering toolchains.
   const child = spawn("bash", ["-c", s.command], {
     cwd: dir,
-    env: { ...process.env, PATH: SHELL_PATH, ...(s.env || {}) },
+    env: { ...process.env, PATH: SHELL_PATH, ...fileEnv, ...(s.env || {}) },
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
