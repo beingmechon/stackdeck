@@ -833,6 +833,50 @@ async function restartService(s) {
   return startService(s, wasBranch);
 }
 
+/* ---------- worktree instances ----------
+   Run ANOTHER branch of a service in parallel: a git worktree gives it its
+   own checkout, a free port is injected as $PORT. Instances are ephemeral
+   (they do not survive daemon restarts) and live under the data dir. */
+const instances = {}; // "svc@branch" -> { svc, branch, dir, port, child, startedAt }
+function freePortFrom(base) {
+  bustPortCache();
+  const taken = listeningMap();
+  for (let p = base; p < base + 200; p++) if (!taken.has(p)) return p;
+  return null;
+}
+function startWorktree(s, branch) {
+  const mainDir = svcDir(s);
+  const g = gitInfo(mainDir);
+  if (!g.isGit) return { code: 400, error: "not a git repository" };
+  if (!g.branches.includes(branch)) return { code: 400, error: `unknown branch '${branch}'` };
+  const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const key = `${s.name}@${safeBranch}`; // also the log-file name — must stay path-safe
+  if (instances[key] && instances[key].child.exitCode === null)
+    return { code: 409, error: `${key} is already running` };
+  const wtDir = path.join(DATA_HOME, "worktrees", s.name, safeBranch);
+  if (!fs.existsSync(wtDir)) {
+    fs.mkdirSync(path.dirname(wtDir), { recursive: true });
+    const r = git(mainDir, "worktree", "add", wtDir, branch);
+    if (!r.ok) return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
+  }
+  const port = s.port ? freePortFrom(Number(s.port) + 1) : null;
+  const envFile = s.envFile === false ? null : path.join(wtDir, s.envFile || ".env");
+  const fileEnv = envFile && fs.existsSync(envFile) ? parseEnvFile(envFile) : {};
+  const child = spawn("bash", ["-c", s.command], {
+    cwd: wtDir,
+    env: { ...process.env, PATH: SHELL_PATH, ...fileEnv, ...(s.env || {}), ...(port ? { PORT: String(port) } : {}) },
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (d) => pushLog(key, d));
+  child.stderr.on("data", (d) => pushLog(key, d));
+  child.on("error", (e) => { pushLog(key, `[stackdeck] failed to start: ${e.message}\n`); delete instances[key]; });
+  child.on("exit", (code, sig) => { pushLog(key, `[stackdeck] exited (code=${code} signal=${sig})\n`); delete instances[key]; });
+  instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now() };
+  pushLog(key, `[stackdeck] worktree instance: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtDir}\n`);
+  return { code: 200, ok: true, key, port, pid: child.pid };
+}
+
 /* ---------- http ---------- */
 
 const MAX_BODY = 1024 * 1024;
@@ -950,7 +994,29 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       hiddenGroups: cfg.hiddenGroups || [],
       hiddenCategories: cfg.hiddenCategories || [],
       services: cfg.services.map(serviceState),
+      instances: Object.entries(instances)
+        .filter(([, i]) => i.child.exitCode === null)
+        .map(([key, i]) => ({ key, svc: i.svc, branch: i.branch, port: i.port, pid: i.child.pid, startedAt: i.startedAt })),
     });
+
+  if (req.method === "POST" && url.pathname === "/api/worktree/start") {
+    const { name, branch } = await readBody(req);
+    const s = findSvc(name);
+    if (!s) return json(res, 404, { error: "unknown service" });
+    if (typeof branch !== "string" || !branch) return json(res, 400, { error: "branch required" });
+    const r = startWorktree(s, branch);
+    return json(res, r.code, r);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/worktree/stop") {
+    const { key } = await readBody(req);
+    const i = instances[key];
+    if (!i || i.child.exitCode !== null) return json(res, 404, { error: "no such running instance" });
+    const child = i.child, pid = child.pid;
+    try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
+    setTimeout(() => { if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch {} } }, 5000).unref();
+    return json(res, 200, { ok: true, stopped: pid });
+  }
 
   if (req.method === "GET" && url.pathname === "/api/infra")
     return json(res, 200, INFRA().map((t) => ({
@@ -1200,7 +1266,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
 
   if (req.method === "GET" && url.pathname === "/api/logs") {
     const name = url.searchParams.get("name");
-    if (!findSvc(name)) return json(res, 404, { error: "unknown service" });
+    if (!findSvc(name) && !instances[name] && !buffers[name]) return json(res, 404, { error: "unknown service" });
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
     res.write(":connected\n\n"); // SSE comment: flushes headers even when the buffer is empty
     for (const l of (buffers[name] || []).slice(-300)) res.write(`data: ${JSON.stringify(l)}\n\n`);

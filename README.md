@@ -60,6 +60,11 @@ npm link                     # then: stackdeck | stackdeck status | stackdeck lo
   allows unprivileged bind (macOS), `:8880` otherwise.
 - **Multi-process repos** — a Procfile, docker-compose services, or pnpm
   workspace packages turn one repo into a section of services with one click.
+- **Parallel branches (worktrees)** — pick a branch and hit ⧉: the service
+  runs that branch in its own git worktree with a free port injected as
+  `$PORT`, side by side with the main checkout. Made for the
+  several-agents-on-several-branches workflow. Instances are ephemeral (they
+  don't survive daemon restarts) and worktrees are reused across runs.
 - **CLI parity** — `stackdeck status|start|stop|restart|logs <name>` talks to
   the same daemon.
 - **MCP server** — `stackdeck mcp` exposes list/start/stop/restart/logs as

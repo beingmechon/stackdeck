@@ -285,7 +285,7 @@ const $svc = document.getElementById("services");
 const $proj = document.getElementById("projects");
 const $toast = document.getElementById("toast");
 const open = new Set(), logOpen = new Set(), streams = {};
-let services = [], projects = [], groups = [];
+let services = [], projects = [], groups = [], instancesList = [];
 let hiddenGroups = [], hiddenCategories = [], showHidden = false;
 
 /* collapse state: keys "g:<group>" (services) and "c:<category>" (projects) */
@@ -375,12 +375,14 @@ function svcRow(s) {
   // Dirty (uncommitted changes) shows as an amber outline on the dropdown —
   // a badge would shift the columns.
   const selTitle = s.running
-    ? `on ${s.branch} — Kill first to switch branch${s.dirty ? " · uncommitted changes" : ""}`
-    : (s.dirty ? "uncommitted changes — commit or stash to switch branch" : "branch to run");
+    ? `on ${s.branch} — Kill first to switch the main checkout, or ⧉ to run the selected branch in a parallel worktree${s.dirty ? " · uncommitted changes" : ""}`
+    : (s.dirty ? "uncommitted changes — commit or stash to switch branch" : "branch to run (⧉ runs it in a parallel worktree)");
   const branch = `<span class="branch-slot">${s.isGit
-    ? `<select id="br-${s.name}" class="${s.dirty ? "dirty" : ""}" ${s.running ? "disabled" : ""} title="${esc(selTitle)}">
+    ? `<select id="br-${s.name}" class="${s.dirty ? "dirty" : ""}" title="${esc(selTitle)}">
          ${s.branches.map(b => `<option ${b===s.branch?"selected":""}>${esc(b)}</option>`).join("")}
-       </select>`
+       </select>
+       <button class="ghost" style="padding:3px 7px" title="run the selected branch in a parallel worktree (own checkout, auto $PORT)"
+               onclick="worktreeStart('${esc(s.name)}')">⧉</button>`
     : '<span class="badge plain">no git</span>'}</span>`;
   return `
   <div class="row ${s.hidden ? "hiddenItem" : ""}" data-name="${esc(s.name)}"
@@ -468,10 +470,11 @@ function renderServices() {
            <button class="ghost" onclick="hideItem('group',${gArg},${!gHidden})">${gHidden ? "unhide" : "hide"}</button>
            <button class="ghost" aria-label="delete section" title="delete section (services move to Ungrouped)" onclick="delSection(${gArg})">×</button></span></div>`
       : (groups.length ? `<div class="group-head">${chevTitle(key, "Ungrouped", `${running}/${rows.length} up`)}${bulk}</span></div>` : "");
+    const rowHtml = (s) => svcRow(s) + instancesList.filter(i => i.svc === s.name).map(instanceRow).join("");
     const ledger = isClosed && head ? "" : `
       <div class="ledger" data-group="${g === null ? "" : esc(g)}"
            ondragover="ledgerOver(event)" ondragleave="ledgerLeave(event)" ondrop="ledgerDrop(event)">
-        ${rows.length ? rows.map(svcRow).join("") : '<div class="empty">drop services here</div>'}
+        ${rows.length ? rows.map(rowHtml).join("") : '<div class="empty">drop services here</div>'}
       </div>`;
     return `<div class="group-block ${gHidden ? "hiddenItem" : ""}">${head}${ledger}</div>`;
   }).join("");
@@ -708,10 +711,49 @@ async function configure(name) {
 
 /* ---------- actions ---------- */
 
+function instanceRow(i) {
+  return `
+  <div class="row">
+    <div class="row-main" style="padding-left:38px">
+      <span class="dot up"></span>
+      <span class="svc-name" style="font-weight:500">⧉ ${esc(i.svc)} <span class="cmdline">@ ${esc(i.branch)}</span></span>
+      <span class="badge dirty" title="parallel worktree instance">worktree</span>
+      <span class="addr">:${i.port ?? "—"} · ${i.pid}</span>
+      <span class="grow"></span>
+      <span class="row-actions">
+        <button class="kill primary" onclick="stopInstance('${esc(i.key)}')">Kill</button>
+        <button class="ghost" onclick="toggleLogs('${esc(i.key)}')">logs</button>
+      </span>
+    </div>
+    <div class="drawer ${logOpen.has(i.key) ? "open" : ""}" id="logwrap-${i.key}">
+      <input class="logfilter" id="lf-${i.key}" type="search" placeholder="filter logs…" oninput="filterLogs('${esc(i.key)}')">
+      <div class="logs" id="log-${i.key}"></div>
+    </div>
+  </div>`;
+}
+async function worktreeStart(name) {
+  const sel = document.getElementById("br-" + name);
+  if (!sel) return;
+  try {
+    const r = await api("/api/worktree/start", { name, branch: sel.value });
+    toast(`${r.key} running${r.port ? ` with PORT=${r.port}` : ""}`);
+    logOpen.add(r.key);
+  } catch (e) { toast(e.message, true); }
+  loadServices(true);
+}
+async function stopInstance(key) {
+  try { await api("/api/worktree/stop", { key }); toast(key + " killed"); }
+  catch (e) { toast(e.message, true); }
+  setTimeout(() => loadServices(true), 400);
+}
+
 async function start(name, force) {
   const sel = document.getElementById("br-" + name);
   try {
-    await api("/api/start", { name, branch: sel && !sel.disabled ? sel.value : undefined, force: !!force });
+    const s = services.find(x => x.name === name);
+    // when stopped, the dropdown choice is a checkout request; when it was
+    // running the select stays enabled for worktrees only
+    await api("/api/start", { name, branch: sel && s && !s.running ? sel.value : undefined, force: !!force });
     toast(name + " started");
     logOpen.add(name);
   } catch (e) {
@@ -859,6 +901,7 @@ async function loadServices(force) {
   try {
     const d = await api("/api/services");
     groups = d.groups || []; services = d.services || [];
+    instancesList = d.instances || [];
     hiddenGroups = d.hiddenGroups || []; hiddenCategories = d.hiddenCategories || [];
     if (prevUp) for (const s of services) {
       if (prevUp.get(s.name) && !s.running && s.lastExit && !s.lastExit.expected && s.lastExit.code !== 0)
