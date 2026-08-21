@@ -1,0 +1,17 @@
+{
+  "name": "devboard-cli",
+  "version": "0.1.0",
+  "description": "Your projects folder, as a control panel. Browser dashboard to start, stop, and organize local dev services — git-branch aware, zero dependencies.",
+  "license": "MIT",
+  "author": "bharanishraj",
+  "bin": { "devboard": "bin/devboard.js" },
+  "main": "server.js",
+  "files": ["server.js", "index.html", "bin/", "scripts/"],
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "os": ["darwin", "linux"],
+  "keywords": ["process-manager", "dev-server", "dashboard", "local-development", "git", "procfile", "hotel"],
+  "repository": { "type": "git", "url": "https://github.com/bharanishraj/devboard" }
+}

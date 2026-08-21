@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevBoard</title>
+<style>
+  :root {
+    --bg:        oklch(0.145 0.008 75);
+    --surface:   oklch(0.18 0.009 75);
+    --surface-2: oklch(0.215 0.011 75);
+    --border:    oklch(0.27 0.012 75);
+    --hairline:  oklch(0.23 0.010 75);
+    --text:      oklch(0.93 0.010 85);
+    --dim:       oklch(0.66 0.014 80);
+    --faint:     oklch(0.47 0.012 80);
+    --accent:    oklch(0.78 0.115 68);
+    --accent-dim:oklch(0.78 0.115 68 / .14);
+    --green:     oklch(0.74 0.145 152);
+    --green-dim: oklch(0.74 0.145 152 / .13);
+    --red:       oklch(0.66 0.17 26);
+    --red-dim:   oklch(0.66 0.17 26 / .13);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 var(--sans); }
+
+  header {
+    display:flex; align-items:baseline; gap:14px;
+    padding:20px 28px 0; max-width:1000px; margin:0 auto;
+  }
+  header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:.02em; }
+  header h1 span { color:var(--accent); }
+  #summary { color:var(--dim); font-size:12.5px; }
+  header .spacer { flex:1; }
+  header .paths { color:var(--faint); font-size:11.5px; font-family:var(--mono); }
+
+  main { max-width:1000px; margin:0 auto; padding:18px 28px 80px; }
+
+  .section-label {
+    margin:26px 2px 8px; font-size:11px; font-weight:600; letter-spacing:.09em;
+    text-transform:uppercase; color:var(--faint);
+    display:flex; align-items:center; gap:10px;
+  }
+  .section-label .count { color:var(--dim); font-weight:500; letter-spacing:0; text-transform:none; }
+  .section-label input {
+    margin-left:auto; width:220px; font-size:12.5px; letter-spacing:0; text-transform:none;
+  }
+
+  .ledger { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+
+  .row { border-top:1px solid var(--hairline); transition:background .15s ease-out; }
+  .row:first-child { border-top:none; }
+  .row:hover { background:var(--surface-2); }
+  .row-main { display:flex; align-items:center; gap:12px; padding:11px 16px; }
+
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--faint); flex:none; }
+  .dot.up { background:var(--green); box-shadow:0 0 0 3px var(--green-dim); }
+
+  .svc-name { font-weight:600; font-size:13.5px; min-width:96px; }
+  .addr { font-family:var(--mono); font-size:12px; color:var(--dim); white-space:nowrap; }
+  .grow { flex:1; min-width:0; }
+  .cmdline {
+    font-family:var(--mono); font-size:11.5px; color:var(--faint);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .cmdline b { color:var(--dim); font-weight:500; }
+
+  .badge {
+    font-size:10.5px; font-weight:600; letter-spacing:.03em; padding:2px 7px;
+    border-radius:5px; white-space:nowrap;
+  }
+  .badge.ext   { color:var(--accent); background:var(--accent-dim); }
+  .badge.dirty { color:var(--accent); background:var(--accent-dim); }
+  .badge.git   { color:var(--dim); background:oklch(0.30 0.012 75 / .5); font-family:var(--mono); font-weight:500; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
+  .badge.plain { color:var(--faint); background:oklch(0.30 0.012 75 / .35); }
+  .badge.cfgd  { color:var(--green); background:var(--green-dim); }
+
+  select, input, textarea {
+    background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:7px;
+    padding:5px 9px; font-family:var(--mono); font-size:12px;
+  }
+  select:focus-visible, input:focus-visible, textarea:focus-visible, button:focus-visible {
+    outline:2px solid var(--accent); outline-offset:1px;
+  }
+  select { max-width:230px; }
+  select:disabled { opacity:.4; cursor:not-allowed; }
+  textarea { width:100%; resize:vertical; min-height:34px; }
+
+  button {
+    font:600 12.5px var(--sans); color:var(--text);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:7px;
+    padding:5px 13px; cursor:pointer;
+    transition:border-color .15s ease-out, background .15s ease-out, color .15s ease-out;
+  }
+  button:hover { border-color:var(--dim); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.start { color:var(--green); background:var(--green-dim); border-color:transparent; }
+  button.start:hover { background:var(--green); color:oklch(0.15 0.02 152); }
+  button.kill { color:var(--red); background:var(--red-dim); border-color:transparent; }
+  button.kill:hover { background:var(--red); color:oklch(0.97 0.01 26); }
+  button.ghost { background:transparent; border-color:transparent; color:var(--dim); font-weight:500; }
+  button.ghost:hover { color:var(--text); border-color:var(--border); }
+  button.add { color:var(--accent); background:var(--accent-dim); border-color:transparent; }
+  button.add:hover { background:var(--accent); color:oklch(0.16 0.02 68); }
+
+  .drawer { display:none; padding:4px 16px 14px 36px; }
+  .drawer.open { display:block; }
+  .fields { display:grid; grid-template-columns:64px 1fr; gap:7px 12px; align-items:center; max-width:720px; }
+  .fields label { color:var(--faint); font-size:11.5px; text-align:right; }
+
+  .logs {
+    background:oklch(0.10 0.006 75); border:1px solid var(--hairline); border-radius:8px;
+    padding:10px 12px; height:250px; overflow:auto;
+    font-family:var(--mono); font-size:11.5px; line-height:1.55; white-space:pre-wrap; color:var(--dim);
+  }
+
+  .empty { padding:26px 16px; text-align:center; color:var(--faint); font-size:12.5px; }
+
+  /* drag & drop */
+  .handle {
+    color:var(--faint); cursor:grab; font-size:13px; letter-spacing:-1px;
+    padding:2px 2px 2px 0; user-select:none; flex:none;
+  }
+  .handle:hover { color:var(--dim); }
+  .row.dragging { opacity:.35; }
+  .row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+  .ledger.drop-into { border-color:var(--accent); }
+  .group-block { margin-bottom:18px; }
+  .group-head {
+    display:flex; align-items:center; gap:8px; margin:0 2px 6px;
+    font-size:11.5px; font-weight:600; color:var(--dim); letter-spacing:.04em;
+  }
+  .group-head .count { color:var(--faint); font-weight:500; }
+  .group-head button { padding:1px 7px; font-size:11px; }
+  .group-head .actions { margin-left:auto; display:flex; gap:4px; }
+  .hiddenItem { opacity:.45; }
+  .group-head .title { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; }
+  .group-head .title:hover { color:var(--text); }
+  .chev { display:inline-block; transition:transform .15s ease-out; font-size:10px; color:var(--faint); }
+  .chev.closed { transform:rotate(-90deg); }
+
+  .toast {
+    position:fixed; bottom:22px; left:50%; transform:translate(-50%, 8px);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:9px;
+    padding:10px 18px; max-width:70%; font-size:13px;
+    opacity:0; pointer-events:none; transition:opacity .2s ease-out, transform .2s ease-out;
+  }
+  .toast.show { opacity:1; transform:translate(-50%, 0); }
+  .toast.err { border-color:var(--red); color:oklch(0.85 0.06 26); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>▲</span> DevBoard</h1>
+  <span id="summary"></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="hiddenToggle" onclick="toggleHidden()" title="show/hide the items you've hidden"></button>
+  <span class="paths" id="metaPaths"></span>
+</header>
+<main>
+  <div class="section-label">Services <span class="count" id="svc-count"></span>
+    <span style="margin-left:auto; display:flex; gap:4px">
+      <button class="ghost" onclick="collapseAll('g', true)">collapse all</button>
+      <button class="ghost" onclick="collapseAll('g', false)">expand all</button>
+      <button class="ghost" onclick="addSection()">+ section</button>
+    </span>
+  </div>
+  <div id="services"></div>
+
+  <div class="section-label">
+    Projects <span class="count" id="proj-count"></span>
+    <span style="margin-left:auto; display:flex; gap:4px; align-items:center">
+      <button class="ghost" onclick="collapseAll('c', true)">collapse all</button>
+      <button class="ghost" onclick="collapseAll('c', false)">expand all</button>
+      <input id="filter" type="search" placeholder="filter ~/Projects…" oninput="renderProjects()">
+    </span>
+  </div>
+  <div id="projects"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $svc = document.getElementById("services");
+const $proj = document.getElementById("projects");
+const $toast = document.getElementById("toast");
+const open = new Set(), logOpen = new Set(), streams = {};
+let services = [], projects = [], groups = [];
+let hiddenGroups = [], hiddenCategories = [], showHidden = false;
+
+/* collapse state: keys "g:<group>" (services) and "c:<category>" (projects) */
+const collapsed = new Set(JSON.parse(localStorage.getItem("devboard.collapsed") || "[]"));
+function saveCollapsed() { localStorage.setItem("devboard.collapsed", JSON.stringify([...collapsed])); }
+function toggleCollapse(key) {
+  collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+  saveCollapsed();
+  key.startsWith("g:") ? renderServices() : renderProjects();
+}
+function collapseAll(prefix, on) {
+  const keys = prefix === "g"
+    ? (groups.length ? [...groups, ""] : [""]).map(g => "g:" + g)
+    : [...new Set(projects.map(p => p.category || "Uncategorized"))].map(c => "c:" + c);
+  for (const k of keys) on ? collapsed.add(k) : collapsed.delete(k);
+  saveCollapsed();
+  prefix === "g" ? renderServices() : renderProjects();
+}
+function chevTitle(key, label, count) {
+  return `<span class="title" onclick="toggleCollapse(decodeURIComponent('${encodeURIComponent(key)}'))">
+    <span class="chev ${collapsed.has(key) ? "closed" : ""}">▾</span>${label}
+    <span class="count">${count}</span></span>`;
+}
+
+function toggleHidden() { showHidden = !showHidden; renderServices(); renderProjects(); updateHiddenToggle(); }
+function updateHiddenToggle() {
+  const n = services.filter(s => s.hidden).length + hiddenGroups.length + hiddenCategories.length;
+  const el = document.getElementById("hiddenToggle");
+  el.textContent = showHidden ? "hide hidden" : `hidden (${n})`;
+  el.style.display = n ? "" : "none";
+}
+async function hideItem(type, name, hidden) {
+  try { await api("/api/hide", { type, name, hidden }); }
+  catch (e) { toast(e.message, true); }
+  loadServices(true); renderProjects();
+}
+
+async function startAll(group) {
+  const targets = services.filter(s => (s.group || null) === group && !s.running && !s.hidden);
+  if (!targets.length) return toast("nothing to start");
+  const r = await Promise.allSettled(targets.map(s => api("/api/start", { name: s.name })));
+  const ok = r.filter(x => x.status === "fulfilled").length;
+  toast(`started ${ok}/${targets.length}${ok < targets.length ? " — see logs" : ""}`, ok < targets.length);
+  loadServices(true);
+}
+async function stopAll(group) {
+  const targets = services.filter(s => (s.group || null) === group && s.running);
+  if (!targets.length) return toast("nothing to stop");
+  const r = await Promise.allSettled(targets.map(s => api("/api/stop", { name: s.name })));
+  const ok = r.filter(x => x.status === "fulfilled").length;
+  toast(`stopped ${ok}/${targets.length}`);
+  setTimeout(() => loadServices(true), 500);
+}
+
+function toast(msg, err) {
+  $toast.textContent = msg;
+  $toast.className = "toast show" + (err ? " err" : "");
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => ($toast.className = "toast"), 4200);
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) } : {});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+
+/* ---------- services ---------- */
+
+function svcRow(s) {
+  const branch = s.isGit
+    ? `<select id="br-${s.name}" ${s.running ? `disabled title="on ${esc(s.branch)} — Kill first to switch branch"` : `title="branch to run"`}>
+         ${s.branches.map(b => `<option ${b===s.branch?"selected":""}>${esc(b)}</option>`).join("")}
+       </select>
+       ${s.dirty ? '<span class="badge dirty" title="uncommitted changes; branch switch blocked">dirty</span>' : ""}`
+    : '<span class="badge plain">no git</span>';
+  return `
+  <div class="row ${s.hidden ? "hiddenItem" : ""}" data-name="${esc(s.name)}"
+       ondragover="rowOver(event)" ondragleave="rowLeave(event)" ondrop="rowDrop(event)">
+    <div class="row-main">
+      <span class="handle" draggable="true" title="drag to reorder or move to a section"
+            ondragstart="dragStart(event,'${esc(s.name)}')" ondragend="dragEnd()">⠿</span>
+      <span class="dot ${s.running ? "up" : ""}"></span>
+      <span class="svc-name">${esc(s.name)}</span>
+      ${s.running && !s.managed ? '<span class="badge ext" title="running, but not started from DevBoard">external</span>' : ""}
+      <span class="addr">:${s.port ?? "—"}${s.pid ? " · " + s.pid : ""}</span>
+      <span class="grow cmdline" title="${esc(s.dir)}">${esc(shortDir(s.dir))} · <b>${esc(s.command)}</b></span>
+      ${branch}
+      ${s.running
+        ? `<button class="kill" onclick="stop('${s.name}')">Kill</button>
+           <button class="ghost" title="stop, then start again on the same branch" onclick="restart('${s.name}')">restart</button>`
+        : `<button class="start" onclick="start('${s.name}')">Start</button>`}
+      <button class="ghost" onclick="toggleLogs('${s.name}')">logs</button>
+      <button class="ghost" onclick="toggleEdit('${s.name}')">edit</button>
+      <button class="ghost" title="${s.hidden ? "show on board" : "hide from board"}"
+              onclick="hideItem('service','${esc(s.name)}',${!s.hidden})">${s.hidden ? "unhide" : "hide"}</button>
+    </div>
+    <div class="drawer ${open.has(s.name) ? "open" : ""}" id="edit-${s.name}">
+      <div class="fields">
+        <label>dir</label><input id="dir-${s.name}" value="${esc(s.dir)}">
+        <label>command</label><textarea id="cmd-${s.name}">${esc(s.command)}</textarea>
+        <label>port</label><input id="port-${s.name}" value="${s.port ?? ""}" placeholder="for status detection">
+        <label>env</label><textarea id="env-${s.name}" placeholder='{"KEY":"value"}'>${esc(JSON.stringify(s.env || {}))}</textarea>
+        <label></label>
+        <div style="display:flex; gap:8px">
+          <button onclick="saveSvc('${s.name}')">Save</button>
+          <button class="ghost" onclick="delSvc('${s.name}')">remove</button>
+        </div>
+      </div>
+    </div>
+    <div class="drawer ${logOpen.has(s.name) ? "open" : ""}" id="logwrap-${s.name}">
+      <div class="logs" id="log-${s.name}"></div>
+    </div>
+  </div>`;
+}
+
+function shortDir(d){ return d.replace(/^\/Users\/[^/]+/, "~"); }
+
+function renderServices() {
+  const up = services.filter(s => s.running).length;
+  document.getElementById("svc-count").textContent = `${up} running · ${services.length - up} stopped`;
+  document.getElementById("summary").textContent = up ? `${up} service${up>1?"s":""} up` : "all quiet";
+  if (!services.length) {
+    $svc.innerHTML = '<div class="ledger"><div class="empty">No services yet. Configure one from the Projects list below.</div></div>';
+    return;
+  }
+  const sections = groups.length ? [...groups, null] : [null];
+  $svc.innerHTML = sections.map(g => {
+    const gHidden = g !== null && hiddenGroups.includes(g);
+    if (gHidden && !showHidden) return "";
+    const rows = services.filter(s => (s.group || null) === g && (showHidden || !s.hidden));
+    if (g === null && groups.length && !rows.length) return "";
+    const gArg = g === null ? "null" : `decodeURIComponent('${encodeURIComponent(g)}')`;
+    const key = "g:" + (g ?? "");
+    const isClosed = collapsed.has(key);
+    const running = rows.filter(r => r.running).length;
+    const bulk = `<span class="actions">
+      <button class="ghost" onclick="startAll(${gArg})" title="start every stopped service here">start all</button>
+      <button class="ghost" onclick="stopAll(${gArg})" title="stop every running service here">stop all</button>`;
+    const head = g !== null
+      ? `<div class="group-head">${chevTitle(key, esc(g), `${running}/${rows.length} up`)}${bulk}
+           <button class="ghost" onclick="hideItem('group',${gArg},${!gHidden})">${gHidden ? "unhide" : "hide"}</button>
+           <button class="ghost" title="delete section (services move to Ungrouped)" onclick="delSection(${gArg})">×</button></span></div>`
+      : (groups.length ? `<div class="group-head">${chevTitle(key, "Ungrouped", `${running}/${rows.length} up`)}${bulk}</span></div>` : "");
+    const ledger = isClosed && head ? "" : `
+      <div class="ledger" data-group="${g === null ? "" : esc(g)}"
+           ondragover="ledgerOver(event)" ondragleave="ledgerLeave(event)" ondrop="ledgerDrop(event)">
+        ${rows.length ? rows.map(svcRow).join("") : '<div class="empty">drop services here</div>'}
+      </div>`;
+    return `<div class="group-block ${gHidden ? "hiddenItem" : ""}">${head}${ledger}</div>`;
+  }).join("");
+  for (const n of logOpen) attachStream(n);
+  updateHiddenToggle();
+}
+
+/* ---------- drag & drop ---------- */
+
+let dragging = null;
+
+function dragStart(ev, name) {
+  dragging = name;
+  ev.dataTransfer.effectAllowed = "move";
+  ev.dataTransfer.setData("text/plain", name);
+  const row = ev.target.closest(".row");
+  ev.dataTransfer.setDragImage(row, 20, 20);
+  setTimeout(() => row.classList.add("dragging"), 0);
+}
+function dragEnd() {
+  dragging = null;
+  document.querySelectorAll(".dragging,.drop-before,.drop-into")
+    .forEach(el => el.classList.remove("dragging","drop-before","drop-into"));
+}
+function rowOver(ev) {
+  if (!dragging) return;
+  ev.preventDefault(); ev.stopPropagation();
+  ev.dataTransfer.dropEffect = "move";
+  const row = ev.currentTarget;
+  if (row.dataset.name !== dragging) row.classList.add("drop-before");
+}
+function rowLeave(ev) { ev.currentTarget.classList.remove("drop-before"); }
+async function rowDrop(ev) {
+  ev.preventDefault(); ev.stopPropagation();
+  const row = ev.currentTarget;
+  row.classList.remove("drop-before");
+  const before = row.dataset.name;
+  const group = row.closest(".ledger").dataset.group || null;
+  if (!dragging || before === dragging) return dragEnd();
+  await move(dragging, group, before);
+}
+function ledgerOver(ev) {
+  if (!dragging) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = "move";
+  ev.currentTarget.classList.add("drop-into");
+}
+function ledgerLeave(ev) { ev.currentTarget.classList.remove("drop-into"); }
+async function ledgerDrop(ev) {
+  ev.preventDefault();
+  ev.currentTarget.classList.remove("drop-into");
+  const group = ev.currentTarget.dataset.group || null;
+  if (!dragging) return;
+  await move(dragging, group, null); // append at end of section
+}
+async function move(name, group, before) {
+  const n = name; dragEnd();
+  try { await api("/api/move", { name: n, group, before }); }
+  catch (e) { toast(e.message, true); }
+  loadServices(true);
+}
+
+/* ---------- sections ---------- */
+
+async function addSection() {
+  const name = prompt("Section name (e.g. OnBehalf, Symphony, Infra):");
+  if (!name || !name.trim()) return;
+  try { await api("/api/group", { name: name.trim() }); loadServices(true); }
+  catch (e) { toast(e.message, true); }
+}
+async function delSection(name) {
+  if (!confirm(`Delete section '${name}'? Its services move to Ungrouped.`)) return;
+  try { await api("/api/group/delete", { name }); loadServices(true); }
+  catch (e) { toast(e.message, true); }
+}
+
+/* ---------- projects ---------- */
+
+function projRow(p) {
+  const branch = p.isGit
+    ? `<span class="badge git" title="current branch">${esc(p.branch || "?")}</span>`
+    : '<span class="badge plain">no git</span>';
+  const cmd = p.suggestedCommand
+    ? `<span class="grow cmdline"><b>${esc(p.suggestedCommand)}</b></span>`
+    : '<span class="grow cmdline">no run command detected</span>';
+  return `
+  <div class="row">
+    <div class="row-main">
+      <span class="svc-name" style="min-width:200px">${esc(p.name)}</span>
+      ${branch}
+      ${cmd}
+      ${p.configured
+        ? '<span class="badge cfgd">configured</span>'
+        : `<button class="add" onclick="configure('${esc(p.name)}')">configure</button>`}
+    </div>
+  </div>`;
+}
+
+let CAT_ORDER = ["Uncategorized"]; // overridden by config.categoryOrder via /api/meta
+
+function renderProjects() {
+  const q = document.getElementById("filter").value.toLowerCase();
+  const shown = projects.filter(p => !q || p.name.toLowerCase().includes(q) ||
+                                     (p.category || "").toLowerCase().includes(q));
+  document.getElementById("proj-count").textContent =
+    `${projects.length} projects · ${projects.filter(p=>p.isGit).length} git`;
+  if (!shown.length) { $proj.innerHTML = '<div class="ledger"><div class="empty">Nothing matches.</div></div>'; return; }
+  const cats = [...new Set(shown.map(p => p.category || "Uncategorized"))]
+    .sort((a, b) => {
+      const ia = CAT_ORDER.indexOf(a), ib = CAT_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+    });
+  $proj.innerHTML = cats.map(c => {
+    const cHidden = hiddenCategories.includes(c);
+    if (cHidden && !showHidden) return "";
+    const rows = shown.filter(p => (p.category || "Uncategorized") === c);
+    const cArg = `decodeURIComponent('${encodeURIComponent(c)}')`;
+    const key = "c:" + c;
+    const isClosed = collapsed.has(key) && !q; // an active filter always shows its matches
+    return `<div class="group-block ${cHidden ? "hiddenItem" : ""}">
+      <div class="group-head">${chevTitle(key, esc(c), rows.length)}
+        <span class="actions">
+          <button class="ghost" onclick="hideItem('category',${cArg},${!cHidden})">${cHidden ? "unhide" : "hide"}</button>
+        </span>
+      </div>
+      ${isClosed ? "" : `<div class="ledger">${rows.map(projRow).join("")}</div>`}
+    </div>`;
+  }).join("");
+  updateHiddenToggle();
+}
+
+async function configure(name) {
+  const p = projects.find(x => x.name === name);
+  if (!p) return;
+  let svcName = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  if (services.some(s => s.name === svcName)) svcName += "-2";
+  try {
+    await api("/api/service", { name: svcName, dir: p.dir, command: p.suggestedCommand || "echo set a command" });
+    toast(`${svcName} added to Services${p.suggestedCommand ? "" : " — set its command"}`);
+    open.add(svcName);
+    await load();
+    document.getElementById("edit-" + svcName)?.scrollIntoView({ block:"center", behavior:"smooth" });
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- actions ---------- */
+
+async function start(name) {
+  const sel = document.getElementById("br-" + name);
+  try {
+    await api("/api/start", { name, branch: sel && !sel.disabled ? sel.value : undefined });
+    toast(name + " started");
+    logOpen.add(name);
+  } catch (e) { toast(e.message, true); }
+  loadServices();
+}
+async function stop(name) {
+  try { await api("/api/stop", { name }); toast(name + " killed"); }
+  catch (e) { toast(e.message, true); }
+  setTimeout(loadServices, 400);
+}
+async function restart(name) {
+  toast(name + " restarting…");
+  try { await api("/api/restart", { name }); toast(name + " restarted"); logOpen.add(name); }
+  catch (e) { toast(e.message, true); }
+  loadServices(true);
+}
+function toggleEdit(name) {
+  open.has(name) ? open.delete(name) : open.add(name);
+  document.getElementById("edit-" + name).classList.toggle("open", open.has(name));
+}
+function toggleLogs(name) {
+  if (logOpen.has(name)) { logOpen.delete(name); streams[name]?.close(); delete streams[name]; }
+  else logOpen.add(name);
+  document.getElementById("logwrap-" + name).classList.toggle("open", logOpen.has(name));
+  if (logOpen.has(name)) attachStream(name);
+}
+/* Minimal ANSI SGR → HTML (colors 30–37/90–97, bold, dim, reset). */
+const ANSI_FG = { 30:"#57534c",31:"#e06c5f",32:"#84c17b",33:"#d9a05b",34:"#7aa2d4",35:"#c092d0",36:"#72bcb8",37:"#b8b2a7",
+                  90:"#6e6a63",91:"#f08d80",92:"#a0d598",93:"#e8bc7e",94:"#9dbfe6",95:"#d5b0e2",96:"#93d5d1",97:"#d6d0c4" };
+function ansiToHtml(raw) {
+  let out = "", openSpan = false;
+  for (const part of raw.split(/(\x1b\[[0-9;]*m)/)) {
+    const m = part.match(/^\x1b\[([0-9;]*)m$/);
+    if (!m) { out += esc(part); continue; }
+    if (openSpan) { out += "</span>"; openSpan = false; }
+    const codes = m[1].split(";").filter(Boolean).map(Number);
+    const styles = [];
+    for (const c of codes) {
+      if (ANSI_FG[c]) styles.push("color:" + ANSI_FG[c]);
+      else if (c === 1) styles.push("font-weight:600");
+      else if (c === 2) styles.push("opacity:.6");
+    }
+    if (styles.length) { out += `<span style="${styles.join(";")}">`; openSpan = true; }
+  }
+  return out + (openSpan ? "</span>" : "");
+}
+
+function attachStream(name) {
+  streams[name]?.close();
+  const pane = document.getElementById("log-" + name);
+  if (!pane) return;
+  pane.innerHTML = "";
+  const es = new EventSource("/api/logs?name=" + encodeURIComponent(name));
+  es.onmessage = (ev) => {
+    pane.insertAdjacentHTML("beforeend", ansiToHtml(JSON.parse(ev.data)) + "\n");
+    while (pane.childNodes.length > 6000) pane.removeChild(pane.firstChild);
+    pane.scrollTop = pane.scrollHeight;
+  };
+  streams[name] = es;
+}
+async function saveSvc(name) {
+  let env;
+  try { env = JSON.parse(document.getElementById("env-" + name).value || "{}"); }
+  catch { return toast("env must be valid JSON", true); }
+  try {
+    await api("/api/service", {
+      name,
+      dir: document.getElementById("dir-" + name).value.trim(),
+      command: document.getElementById("cmd-" + name).value.trim(),
+      port: document.getElementById("port-" + name).value.trim() || undefined,
+      env,
+    });
+    toast(name + " saved"); open.delete(name); load();
+  } catch (e) { toast(e.message, true); }
+}
+async function delSvc(name) {
+  if (!confirm("Remove '" + name + "' from DevBoard? (the project itself is untouched)")) return;
+  try { await api("/api/service/delete", { name }); toast(name + " removed"); load(); }
+  catch (e) { toast(e.message, true); }
+}
+
+/* ---------- data loading ---------- */
+
+function editGuard() {
+  if (open.size || dragging) return true;
+  const ae = document.activeElement;
+  return ae && (ae.closest("#services") || ae.closest("#projects") || ae.id === "filter") &&
+         ["SELECT","INPUT","TEXTAREA"].includes(ae.tagName);
+}
+async function loadServices(force) {
+  if (!force && editGuard()) return;
+  try {
+    const d = await api("/api/services");
+    groups = d.groups || []; services = d.services || [];
+    hiddenGroups = d.hiddenGroups || []; hiddenCategories = d.hiddenCategories || [];
+    renderServices();
+  }
+  catch (e) { toast("DevBoard server unreachable: " + e.message, true); }
+}
+async function loadProjects() {
+  try { projects = await api("/api/projects"); renderProjects(); } catch {}
+}
+async function load() { await Promise.all([loadServices(), loadProjects()]); }
+async function loadMeta() {
+  try {
+    const m = await api("/api/meta");
+    if (m.categoryOrder && m.categoryOrder.length) CAT_ORDER = [...m.categoryOrder, "Uncategorized"];
+    const short = p => p.replace(/^\/(Users|home)\/[^/]+/, "~");
+    document.getElementById("metaPaths").textContent =
+      `${short(m.configPath)} · v${m.version}`;
+    document.getElementById("filter").placeholder =
+      `filter ${m.projectRoots.map(short).join(", ")}…`;
+    renderProjects();
+  } catch {}
+}
+
+load(); loadMeta();
+setInterval(() => { if (document.visibilityState === "visible") loadServices(); }, 5000);
+setInterval(() => { if (document.visibilityState === "visible" && !editGuard()) loadProjects(); }, 60000);
+</script>
+</body>
+</html>
