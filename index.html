@@ -85,8 +85,15 @@
   select:focus-visible, input:focus-visible, textarea:focus-visible, button:focus-visible {
     outline:2px solid var(--accent); outline-offset:1px;
   }
-  select { max-width:230px; }
   select:disabled { opacity:.4; cursor:not-allowed; }
+
+  /* fixed-width slots keep every row's controls in the same columns */
+  .branch-slot { width:220px; flex:none; display:flex; justify-content:flex-end; }
+  .branch-slot select { width:100%; }
+  .branch-slot select.dirty { border-color:var(--accent); }
+  .row-actions { display:flex; gap:2px; flex:none; align-items:center; }
+  .row-actions .primary { width:74px; text-align:center; }
+  .addr { width:110px; flex:none; text-align:right; }
   textarea { width:100%; resize:vertical; min-height:34px; }
 
   button {
@@ -324,12 +331,16 @@ const shortDir = shortP;
 /* ---------- services ---------- */
 
 function svcRow(s) {
-  const branch = s.isGit
-    ? `<select id="br-${s.name}" ${s.running ? `disabled title="on ${esc(s.branch)} — Kill first to switch branch"` : `title="branch to run"`}>
+  // Dirty (uncommitted changes) shows as an amber outline on the dropdown —
+  // a badge would shift the columns.
+  const selTitle = s.running
+    ? `on ${s.branch} — Kill first to switch branch${s.dirty ? " · uncommitted changes" : ""}`
+    : (s.dirty ? "uncommitted changes — commit or stash to switch branch" : "branch to run");
+  const branch = `<span class="branch-slot">${s.isGit
+    ? `<select id="br-${s.name}" class="${s.dirty ? "dirty" : ""}" ${s.running ? "disabled" : ""} title="${esc(selTitle)}">
          ${s.branches.map(b => `<option ${b===s.branch?"selected":""}>${esc(b)}</option>`).join("")}
-       </select>
-       ${s.dirty ? '<span class="badge dirty" title="uncommitted changes; branch switch blocked">dirty</span>' : ""}`
-    : '<span class="badge plain">no git</span>';
+       </select>`
+    : '<span class="badge plain">no git</span>'}</span>`;
   return `
   <div class="row ${s.hidden ? "hiddenItem" : ""}" data-name="${esc(s.name)}"
        ondragover="rowOver(event)" ondragleave="rowLeave(event)" ondrop="rowDrop(event)">
@@ -342,14 +353,17 @@ function svcRow(s) {
       <span class="addr">:${s.port ?? "—"}${s.pid ? " · " + s.pid : ""}</span>
       <span class="grow cmdline" title="${esc(s.dir)}">${esc(shortDir(s.dir))} · <b>${esc(s.command)}</b></span>
       ${branch}
-      ${s.running
-        ? `<button class="kill" onclick="stop('${s.name}')">Kill</button>
-           <button class="ghost" title="stop, then start again on the same branch" onclick="restart('${s.name}')">restart</button>`
-        : `<button class="start" onclick="start('${s.name}')">Start</button>`}
-      <button class="ghost" onclick="toggleLogs('${s.name}')">logs</button>
-      <button class="ghost" onclick="toggleEdit('${s.name}')">edit</button>
-      <button class="ghost" title="${s.hidden ? "show on board" : "hide from board"}"
-              onclick="hideItem('service','${esc(s.name)}',${!s.hidden})">${s.hidden ? "unhide" : "hide"}</button>
+      <span class="row-actions">
+        ${s.running
+          ? `<button class="kill primary" onclick="stop('${s.name}')">Kill</button>`
+          : `<button class="start primary" onclick="start('${s.name}')">Start</button>`}
+        <button class="ghost" ${s.running ? "" : "disabled"} title="stop, then start again on the same branch"
+                onclick="restart('${s.name}')">restart</button>
+        <button class="ghost" onclick="toggleLogs('${s.name}')">logs</button>
+        <button class="ghost" onclick="toggleEdit('${s.name}')">edit</button>
+        <button class="ghost" title="${s.hidden ? "show on board" : "hide from board"}"
+                onclick="hideItem('service','${esc(s.name)}',${!s.hidden})">${s.hidden ? "unhide" : "hide"}</button>
+      </span>
     </div>
     <div class="drawer ${open.has(s.name) ? "open" : ""}" id="edit-${s.name}">
       <div class="fields">
