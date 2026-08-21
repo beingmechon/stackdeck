@@ -82,9 +82,13 @@ function openBrowser(url) {
     await ensureDaemon();
     const res = await fetch(`${BASE}/api/logs?name=${encodeURIComponent(name)}`);
     if (!res.ok) { console.error("error:", (await res.json()).error); process.exit(1); }
+    let buf = "";
     for await (const chunk of res.body) {
-      for (const line of chunk.toString().split("\n"))
-        if (line.startsWith("data: ")) console.log(JSON.parse(line.slice(6)));
+      buf += chunk.toString();
+      const lines = buf.split("\n");
+      buf = lines.pop(); // keep any partial SSE frame for the next chunk
+      for (const line of lines)
+        if (line.startsWith("data: ")) { try { console.log(JSON.parse(line.slice(6))); } catch {} }
     }
     return;
   }

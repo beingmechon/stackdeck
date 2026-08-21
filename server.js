@@ -161,6 +161,8 @@ function gitBranchFast(dir) {
 function inferCommand(dir) {
   const has = (f) => fs.existsSync(path.join(dir, f));
   const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
+  // Tolerant JSON: one malformed manifest must not abort the remaining detectors.
+  const jread = (f) => { try { return JSON.parse(read(f).replace(/\/\/[^\n]*/g, "")) || {}; } catch { return {}; } };
   const DEV_TARGETS = ["dev", "start", "run", "serve", "up"];
   try {
     /* -- author intent ------------------------------------------------ */
@@ -180,7 +182,7 @@ function inferCommand(dir) {
 
     /* -- JavaScript / TypeScript -------------------------------------- */
     if (has("package.json")) {
-      const pkg = JSON.parse(read("package.json"));
+      const pkg = jread("package.json");
       const runner =
         has("bun.lockb") || has("bun.lock") ? "bun" :
         has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" :
@@ -189,7 +191,7 @@ function inferCommand(dir) {
         if (pkg.scripts && pkg.scripts[s]) return `${runner} run ${s}`;
     }
     for (const dj of ["deno.json", "deno.jsonc"]) if (has(dj)) {
-      const tasks = (JSON.parse(read(dj).replace(/\/\/[^\n]*/g, "")) || {}).tasks || {};
+      const tasks = jread(dj).tasks || {};
       for (const t of DEV_TARGETS) if (tasks[t]) return `deno task ${t}`;
     }
 
@@ -238,7 +240,7 @@ function inferCommand(dir) {
     }
     if (has("artisan")) return "php artisan serve";                 // Laravel
     if (has("composer.json")) {
-      const scripts = (JSON.parse(read("composer.json")) || {}).scripts || {};
+      const scripts = jread("composer.json").scripts || {};
       for (const t of ["dev", "start", "serve"]) if (scripts[t]) return `composer run ${t}`;
       if (has("index.php")) return "php -S localhost:8080";
     }
@@ -299,6 +301,54 @@ function scanProjects() {
   }
   out.sort((a, b) => (b.suggestedCommand ? 1 : 0) - (a.suggestedCommand ? 1 : 0) || byName(a.name, b.name));
   return out;
+}
+
+/* ---------- dev-tool (infra) detection ----------
+   DBngin-style: databases and brokers run as ordinary foreground services —
+   managed child, streamed logs, clean kill — no daemons, no Docker required. */
+
+const DATA_HOME = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "devboard");
+const firstDir = (cands) => cands.map(expand).find((c) => c && fs.existsSync(c)) || null;
+const own = (sub) => `mkdir -p ${DATA_HOME}/${sub} && `; // self-initializing data dir
+
+const INFRA = () => [
+  { name: "postgres", title: "PostgreSQL", bin: "postgres", port: 5432,
+    command: (() => {
+      const d = firstDir([process.env.PGDATA,
+        "/opt/homebrew/var/postgresql@18", "/opt/homebrew/var/postgresql@17", "/opt/homebrew/var/postgresql@16",
+        "/opt/homebrew/var/postgresql@15", "/opt/homebrew/var/postgresql@14", "/opt/homebrew/var/postgres",
+        "/usr/local/var/postgresql@17", "/usr/local/var/postgresql@16", "/usr/local/var/postgres",
+        "/var/lib/postgresql/data", "/var/lib/postgres/data"]);
+      return d ? `postgres -D ${d}` : "postgres -D <your-data-dir>  # run initdb first";
+    })() },
+  { name: "mysql", title: "MySQL", bin: "mysqld", port: 3306, command: "mysqld" },
+  { name: "mariadb", title: "MariaDB", bin: "mariadbd", port: 3306, command: "mariadbd" },
+  { name: "mongodb", title: "MongoDB", bin: "mongod", port: 27017,
+    command: (() => {
+      const d = firstDir(["/opt/homebrew/var/mongodb", "/usr/local/var/mongodb", "/var/lib/mongodb"]);
+      return d ? `mongod --dbpath ${d}` : `${own("mongodb")}mongod --dbpath ${DATA_HOME}/mongodb`;
+    })() },
+  { name: "redis", title: "Redis", bin: "redis-server", port: 6379, command: "redis-server" },
+  { name: "valkey", title: "Valkey", bin: "valkey-server", port: 6379, command: "valkey-server" },
+  { name: "memcached", title: "Memcached", bin: "memcached", port: 11211, command: "memcached -v" },
+  { name: "elasticsearch", title: "Elasticsearch", bin: "elasticsearch", port: 9200, command: "elasticsearch" },
+  { name: "opensearch", title: "OpenSearch", bin: "opensearch", port: 9200, command: "opensearch" },
+  { name: "rabbitmq", title: "RabbitMQ", bin: "rabbitmq-server", port: 5672, command: "rabbitmq-server" },
+  { name: "nats", title: "NATS", bin: "nats-server", port: 4222, command: "nats-server" },
+  { name: "minio", title: "MinIO", bin: "minio", port: 9000, command: `${own("minio")}minio server ${DATA_HOME}/minio` },
+  { name: "temporal", title: "Temporal (dev)", bin: "temporal", port: 7233, command: "temporal server start-dev" },
+  { name: "clickhouse", title: "ClickHouse", bin: "clickhouse", port: 8123, command: "clickhouse server" },
+  { name: "mailpit", title: "Mailpit", bin: "mailpit", port: 8025, command: "mailpit" },
+];
+
+const WHICH_CACHE = {};
+function which(bin) {
+  if (bin in WHICH_CACHE) return WHICH_CACHE[bin];
+  try {
+    WHICH_CACHE[bin] = execFileSync("bash", ["-c", `command -v ${bin}`],
+      { env: { ...process.env, PATH: SHELL_PATH }, timeout: 3000 }).toString().trim() || null;
+  } catch { WHICH_CACHE[bin] = null; }
+  return WHICH_CACHE[bin];
 }
 
 /* ---------- actions ---------- */
@@ -400,10 +450,32 @@ const readBody = (req) => new Promise((resolve) => {
 });
 const json = (res, code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
 
+const PORT = Number(process.env.DEVBOARD_PORT || cfg.port || 8899);
+const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
+
+// Names are used in log-file paths and rendered in the UI — keep them tame.
+const validSvcName = (n) => typeof n === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(n);
+const validLabel = (n) => typeof n === "string" && n.length >= 1 && n.length <= 64 && !/[<>"'\\\/\n]/.test(n);
+
 // maxHeaderSize: browsers can carry >16KB of localhost cookies from other dev
 // apps, which would hit Node's default header limit and 431 every request.
 const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => {
   const url = new URL(req.url, "http://localhost");
+
+  // This daemon executes shell commands, so it must only answer its own page
+  // and local tools — never a random website the user has open:
+  //  1. Host pinning: defeats DNS-rebinding (attacker.com resolving to 127.0.0.1).
+  //  2. JSON-only POSTs: a cross-origin JSON POST triggers a CORS preflight,
+  //     which we never answer, so browsers block it. text/plain sneak-POSTs
+  //     are rejected here.
+  //  3. Origin check: if a browser attaches an Origin, it must be ours.
+  if (!ALLOWED_HOSTS.has(req.headers.host)) return json(res, 403, { error: "unrecognized Host" });
+  if (req.method === "POST") {
+    const ct = (req.headers["content-type"] || "").split(";")[0].trim();
+    if (ct !== "application/json") return json(res, 415, { error: "content-type must be application/json" });
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}`) return json(res, 403, { error: "cross-origin request rejected" });
+  }
 
   if (req.method === "GET" && url.pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/html" });
@@ -463,6 +535,14 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       services: cfg.services.map(serviceState),
     });
 
+  if (req.method === "GET" && url.pathname === "/api/infra")
+    return json(res, 200, INFRA().map((t) => ({
+      name: t.name, title: t.title, port: t.port, command: t.command,
+      found: !!which(t.bin),
+      runningPid: portPid(t.port),
+      configured: cfg.services.some((s) => s.name === t.name),
+    })).filter((t) => t.found));
+
   if (req.method === "GET" && url.pathname === "/api/projects") {
     if (!projCache.data || Date.now() - projCache.t > 30000 || url.searchParams.has("fresh"))
       projCache = { t: Date.now(), data: scanProjects() };
@@ -512,7 +592,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   if (req.method === "POST" && url.pathname === "/api/group") {
     const { name } = await readBody(req);
     const n = (name || "").trim();
-    if (!n) return json(res, 400, { error: "section name required" });
+    if (!validLabel(n)) return json(res, 400, { error: "section name: 1–64 chars, no quotes/slashes/angle brackets" });
     if (cfg.groups.includes(n)) return json(res, 409, { error: "section already exists" });
     cfg.groups.push(n);
     saveCfg();
@@ -549,13 +629,28 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   if (req.method === "POST" && url.pathname === "/api/service") {
     const b = await readBody(req);
     if (!b.name || !b.dir || !b.command) return json(res, 400, { error: "name, dir, command are required" });
+    if (!validSvcName(b.name))
+      return json(res, 400, { error: "service name must be letters/digits/dot/dash/underscore, max 64 chars" });
     let s = findSvc(b.name);
     if (s && procs[s.name] && procs[s.name].child.exitCode === null)
       return json(res, 409, { error: "stop the service before editing it" });
+    if (b.port !== undefined && b.port !== null && b.port !== "") {
+      const p = Number(b.port);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) return json(res, 400, { error: "port must be 1–65535" });
+      b.port = p;
+    } else b.port = undefined;
     if (!s) { s = { name: b.name }; cfg.services.push(s); }
     s.dir = b.dir; s.command = b.command;
-    s.port = b.port ? Number(b.port) : undefined;
+    s.port = b.port;
     s.env = b.env && typeof b.env === "object" ? b.env : (s.env || {});
+    if (b.envFile !== undefined) { // false disables .env auto-load; string picks a file
+      if (b.envFile === false || typeof b.envFile === "string") s.envFile = b.envFile;
+      else delete s.envFile;
+    }
+    if (b.group !== undefined) {
+      if (b.group && cfg.groups.includes(b.group)) s.group = b.group;
+      else delete s.group;
+    }
     saveCfg();
     projCache.t = 0; // "configured" flags may have changed
     return json(res, 200, serviceState(s));
@@ -585,7 +680,6 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   json(res, 404, { error: "not found" });
 });
 
-const PORT = Number(process.env.DEVBOARD_PORT || cfg.port || 8899);
 server.listen(PORT, "127.0.0.1", () =>
   console.log(`devboard v${VERSION} · http://localhost:${PORT} · config ${CONFIG_PATH}`)
 );

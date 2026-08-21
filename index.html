@@ -225,6 +225,9 @@
   </div>
   <div id="services"></div>
 
+  <div class="section-label">Dev tools <span class="count" id="infra-count"></span></div>
+  <div class="ledger" id="infra"></div>
+
   <div class="section-label">
     Projects <span class="count" id="proj-count"></span>
     <span style="margin-left:auto; display:flex; gap:4px; align-items:center">
@@ -311,7 +314,8 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
-function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+// Escapes quotes too — values land inside HTML attributes and inline handlers.
+function esc(s){ return String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 // Shorten a path with the real home dir from /api/meta (never a guessed prefix).
 function shortP(p){ return meta && meta.home && p.startsWith(meta.home) ? "~" + p.slice(meta.home.length) : p; }
 const shortDir = shortP;
@@ -646,6 +650,40 @@ async function loadServices(force) {
   }
   catch (e) { toast("DevBoard server unreachable: " + e.message, true); }
 }
+/* ---------- dev tools (infra) ---------- */
+
+let infra = [];
+async function loadInfra() {
+  try { infra = await api("/api/infra"); renderInfra(); } catch {}
+}
+function renderInfra() {
+  document.getElementById("infra-count").textContent = `${infra.length} detected on this machine`;
+  document.getElementById("infra").innerHTML = infra.length ? infra.map(t => `
+    <div class="row">
+      <div class="row-main">
+        <span class="dot ${t.runningPid ? "up" : ""}"></span>
+        <span class="svc-name" style="min-width:140px">${esc(t.title)}</span>
+        <span class="addr">:${t.port}${t.runningPid ? " · " + t.runningPid : ""}</span>
+        <span class="grow cmdline"><b>${esc(t.command)}</b></span>
+        ${t.configured
+          ? '<span class="badge cfgd">configured</span>'
+          : `<button class="add" onclick="configureInfra('${esc(t.name)}')">configure</button>`}
+      </div>
+    </div>`).join("")
+    : '<div class="empty">No known databases or brokers found on PATH.</div>';
+}
+async function configureInfra(name) {
+  const t = infra.find(x => x.name === name);
+  if (!t) return;
+  try {
+    if (!groups.includes("Infra")) await api("/api/group", { name: "Infra" }).catch(() => {});
+    // envFile:false — a database must not inherit some random ~/.env
+    await api("/api/service", { name: t.name, dir: "~", command: t.command, port: t.port, envFile: false, group: "Infra" });
+    toast(`${t.title} added to Services (Infra section)`);
+    await load(); loadInfra();
+  } catch (e) { toast(e.message, true); }
+}
+
 async function loadProjects(fresh) {
   try { projects = await api("/api/projects" + (fresh ? "?fresh" : "")); renderProjects(); } catch {}
 }
@@ -812,7 +850,8 @@ async function loadMeta() {
   } catch {}
 }
 
-load(); loadMeta();
+load(); loadMeta(); loadInfra();
+setInterval(() => { if (document.visibilityState === "visible") loadInfra(); }, 15000);
 setInterval(() => { if (document.visibilityState === "visible") loadServices(); }, 5000);
 setInterval(() => { if (document.visibilityState === "visible" && !editGuard()) loadProjects(); }, 60000);
 </script>

@@ -44,6 +44,13 @@ npm link                     # then: devboard | devboard status | devboard logs 
   the project list.
 - **CLI parity** — `devboard status|start|stop|restart|logs <name>` talks to
   the same daemon.
+- **Dev tools** — detects databases and brokers installed on your machine
+  (PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey, Elasticsearch/OpenSearch,
+  RabbitMQ, NATS, MinIO, Temporal, ClickHouse, Mailpit, Memcached) and
+  one-click configures them as ordinary foreground services — managed child,
+  streamed logs, clean kill. Data directories are resolved from standard
+  locations (or self-initialized under `~/.local/share/devboard/`); no Docker,
+  no launchd/systemd indirection.
 
 ## Configuration
 
@@ -70,6 +77,15 @@ editable from the UI; the interesting ones:
   ]
 }
 ```
+
+## Security model
+
+The daemon executes shell commands by design, so it defends its HTTP surface:
+it binds to 127.0.0.1 only, pins the `Host` header (DNS-rebinding defense),
+accepts only `application/json` POSTs (a cross-origin JSON POST forces a CORS
+preflight, which is never answered; `text/plain` sneak-POSTs are rejected),
+and rejects any browser `Origin` that isn't its own. Service and section
+names are validated server-side. Do not port-forward it off your machine.
 
 ## Notes that will save you a debugging session
 
