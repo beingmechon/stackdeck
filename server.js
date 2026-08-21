@@ -24,7 +24,13 @@ const ROOT = __dirname;
 
 /* ---------- state directory & config ---------- */
 
-const expand = (p) => (p && p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p);
+// Only "~" and "~/…" are home shorthand; "~user" is left untouched.
+const expand = (p) => {
+  if (!p) return p;
+  if (p === "~") return os.homedir();
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+};
 // Locale-independent sort, so listings are identical on every machine.
 const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -46,20 +52,55 @@ const CONFIG_PATH = path.join(HOME_DIR, "config.json");
 const LOG_DIR = path.join(HOME_DIR, "logs");
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-if (!fs.existsSync(CONFIG_PATH))
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify({
-    port: 8899,
-    projectRoots: ["~/Projects"],
-    services: [],
-    groups: [],
-  }, null, 2) + "\n");
-
-let cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+// A corrupt config must not brick the daemon: set it aside and start fresh.
+let cfg = {};
+if (fs.existsSync(CONFIG_PATH)) {
+  try {
+    cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("not an object");
+  } catch (e) {
+    const broken = `${CONFIG_PATH}.broken-${Date.now()}`;
+    fs.renameSync(CONFIG_PATH, broken);
+    console.error(`config.json is invalid (${e.message}) — moved to ${broken}, starting with defaults`);
+    cfg = {};
+  }
+}
+// Normalize every field we index into; old or hand-edited configs stay safe.
+cfg.port = Number.isInteger(cfg.port) && cfg.port >= 1 && cfg.port <= 65535 ? cfg.port : 8899;
+cfg.services = Array.isArray(cfg.services)
+  ? cfg.services.filter((s) => s && typeof s === "object" && typeof s.name === "string") : [];
 cfg.groups = Array.isArray(cfg.groups) ? cfg.groups : [];
 cfg.projectRoots = Array.isArray(cfg.projectRoots) && cfg.projectRoots.length ? cfg.projectRoots : ["~/Projects"];
-const saveCfg = () => fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n");
+
+// Atomic write: a crash mid-save must never truncate the config.
+const saveCfg = () => {
+  const tmp = `${CONFIG_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+  fs.renameSync(tmp, CONFIG_PATH);
+};
+if (!fs.existsSync(CONFIG_PATH)) saveCfg();
+
 const findSvc = (name) => cfg.services.find((s) => s.name === name);
 const svcDir = (s) => expand(s.dir);
+
+/* ---------- auth token ----------
+   localhost is not a security boundary: any local process can reach this
+   port, and this daemon executes shell commands. A per-install secret
+   (0600, same-user readable) gates every API call. The web page receives
+   it by being served from disk by this same daemon. */
+const crypto = require("crypto");
+const SECRET_PATH = path.join(HOME_DIR, "secret");
+let TOKEN = "";
+try { TOKEN = fs.readFileSync(SECRET_PATH, "utf8").trim(); } catch {}
+if (!TOKEN || TOKEN.length < 32) {
+  TOKEN = crypto.randomBytes(24).toString("hex");
+  fs.writeFileSync(SECRET_PATH, TOKEN + "\n", { mode: 0o600 });
+}
+function tokenOk(t) {
+  if (typeof t !== "string" || !t) return false;
+  const a = Buffer.from(t), b = Buffer.from(TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
 
 /* ---------- environment for spawned services ---------- */
 
@@ -105,6 +146,26 @@ const procs = {};   // name -> { child, startedAt, branch }
 const buffers = {}; // name -> [lines]
 const clients = {}; // name -> Set<res> (SSE)
 
+// Disk logs: one append stream per service, rotated at 5MB (one .1 backup) so
+// a chatty service can't eat the disk.
+const logStreams = {};
+const logWrites = {};
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+function logStream(name) {
+  if (!logStreams[name])
+    logStreams[name] = fs.createWriteStream(path.join(LOG_DIR, `${name}.log`), { flags: "a" });
+  return logStreams[name];
+}
+function maybeRotate(name) {
+  try {
+    const f = path.join(LOG_DIR, `${name}.log`);
+    if (fs.statSync(f).size > MAX_LOG_BYTES) {
+      logStreams[name]?.end();
+      delete logStreams[name];
+      fs.renameSync(f, `${f}.1`);
+    }
+  } catch {}
+}
 function pushLog(name, chunk) {
   const lines = chunk.toString().split("\n").filter((l) => l.length);
   const buf = (buffers[name] = buffers[name] || []);
@@ -112,7 +173,8 @@ function pushLog(name, chunk) {
     buf.push(l);
     if (buf.length > MAX_BUF) buf.shift();
   }
-  fs.appendFile(path.join(LOG_DIR, `${name}.log`), chunk, () => {});
+  logStream(name).write(chunk);
+  if ((logWrites[name] = (logWrites[name] || 0) + 1) % 500 === 0) maybeRotate(name);
   for (const res of clients[name] || []) {
     for (const l of lines) res.write(`data: ${JSON.stringify(l)}\n\n`);
   }
@@ -145,10 +207,17 @@ function serviceState(s) {
 
 let projCache = { t: 0, data: null };
 
-// Fast branch read (no git spawn): parse .git/HEAD directly.
+// Fast branch read (no git spawn): parse .git/HEAD directly. Handles the
+// worktree/submodule case where .git is a "gitdir: <path>" file.
 function gitBranchFast(dir) {
   try {
-    const head = fs.readFileSync(path.join(dir, ".git", "HEAD"), "utf8").trim();
+    let g = path.join(dir, ".git");
+    if (fs.statSync(g).isFile()) {
+      const m = fs.readFileSync(g, "utf8").match(/^gitdir:\s*(.+?)\s*$/m);
+      if (!m) return null;
+      g = path.resolve(dir, m[1]);
+    }
+    const head = fs.readFileSync(path.join(g, "HEAD"), "utf8").trim();
     return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : "(detached)";
   } catch { return null; }
 }
@@ -259,13 +328,13 @@ function scanProjects() {
   const out = [];
   const excluded = new Set((cfg.excludes || []).map(expand));
   const pc = cfg.projectCategories || {};
-  const entry = (dir, name, root, catKeys) => ({
+  const entry = (dir, name, root, catKeys, isGit, cmd) => ({
     name,
     dir,
     root,
-    isGit: fs.existsSync(path.join(dir, ".git")),
+    isGit,
     branch: gitBranchFast(dir),
-    suggestedCommand: inferCommand(dir),
+    suggestedCommand: cmd,
     configured: cfg.services.some((s) => svcDir(s) === dir || svcDir(s).startsWith(dir + path.sep)),
     category: catKeys.map((k) => pc[k]).find(Boolean) || "Uncategorized",
   });
@@ -278,24 +347,31 @@ function scanProjects() {
       const dir = path.join(root, e.name);
       if (excluded.has(dir)) continue;
       // A real project: it's a git repo or we know how to run it.
-      if (fs.existsSync(path.join(dir, ".git")) || inferCommand(dir)) {
-        out.push(entry(dir, e.name, root, [e.name]));
+      const isGit = fs.existsSync(path.join(dir, ".git"));
+      const cmd = inferCommand(dir);
+      if (isGit || cmd) {
+        out.push(entry(dir, e.name, root, [e.name], isGit, cmd));
         continue;
       }
       // Container folder: not a repo itself, but may hold repos one level
       // down (e.g. work/team-api). Surface those instead, inheriting the
       // container's category unless mapped individually.
       const subs = lsDirs(dir)
-        .map((s) => path.join(dir, s.name))
-        .filter((sdir) => !excluded.has(sdir))
-        .filter((sdir) => fs.existsSync(path.join(sdir, ".git")) || inferCommand(sdir));
+        .map((s) => {
+          const sdir = path.join(dir, s.name);
+          if (excluded.has(sdir)) return null;
+          const sGit = fs.existsSync(path.join(sdir, ".git"));
+          const sCmd = inferCommand(sdir);
+          return sGit || sCmd ? { sdir, sGit, sCmd } : null;
+        })
+        .filter(Boolean);
       if (subs.length) {
-        for (const sdir of subs) {
+        for (const { sdir, sGit, sCmd } of subs) {
           const sub = path.basename(sdir);
-          out.push(entry(sdir, `${e.name}/${sub}`, root, [`${e.name}/${sub}`, sub, e.name]));
+          out.push(entry(sdir, `${e.name}/${sub}`, root, [`${e.name}/${sub}`, sub, e.name], sGit, sCmd));
         }
       } else {
-        out.push(entry(dir, e.name, root, [e.name])); // plain folder, listed as-is
+        out.push(entry(dir, e.name, root, [e.name], false, null)); // plain folder, listed as-is
       }
     }
   }
@@ -417,9 +493,13 @@ function startService(s, branch) {
 function stopService(s) {
   const p = procs[s.name];
   if (p && p.child.exitCode === null) {
-    const pid = p.child.pid;
+    const child = p.child, pid = child.pid;
     try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
-    setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch {} }, 5000).unref();
+    // Escalate only if OUR child is still alive — never fire a blind kill at a
+    // pid that may have been reused by an unrelated process.
+    setTimeout(() => {
+      if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch {} }
+    }, 5000).unref();
     return { code: 200, ok: true, stopped: pid };
   }
   const ext = portPid(s.port);
@@ -445,12 +525,21 @@ async function restartService(s) {
 
 /* ---------- http ---------- */
 
+const MAX_BODY = 1024 * 1024;
 const readBody = (req) => new Promise((resolve) => {
-  let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => { try { resolve(JSON.parse(b || "{}")); } catch { resolve({}); } });
+  let b = "";
+  req.on("data", (c) => {
+    b += c;
+    if (b.length > MAX_BODY) { resolve({}); req.destroy(); }
+  });
+  req.on("end", () => { try { resolve(JSON.parse(b || "{}")); } catch { resolve({}); } });
 });
+const validEnv = (v) => v && typeof v === "object" && !Array.isArray(v) &&
+  Object.entries(v).every(([k, val]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && typeof val === "string");
 const json = (res, code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
 
-const PORT = Number(process.env.STACKDECK_PORT || cfg.port || 8899);
+const envPort = Number(process.env.STACKDECK_PORT);
+const PORT = Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535 ? envPort : cfg.port;
 const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
 
 // Names are used in log-file paths and rendered in the UI — keep them tame.
@@ -479,7 +568,14 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
 
   if (req.method === "GET" && url.pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/html" });
-    return res.end(fs.readFileSync(path.join(ROOT, "index.html")));
+    return res.end(fs.readFileSync(path.join(ROOT, "index.html"), "utf8").replace("__STACKDECK_TOKEN__", TOKEN));
+  }
+
+  // Everything under /api needs the per-install token (header, or ?t= for
+  // EventSource which cannot set headers). /api/meta stays open as a ping.
+  if (url.pathname.startsWith("/api/") && url.pathname !== "/api/meta") {
+    const t = req.headers["x-stackdeck-token"] || url.searchParams.get("t");
+    if (!tokenOk(t)) return json(res, 401, { error: "missing or invalid token — reload the page" });
   }
 
   if (req.method === "GET" && url.pathname === "/api/meta")
@@ -514,8 +610,13 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   }
 
   if (req.method === "GET" && url.pathname === "/api/fs") {
-    // List subdirectories of a path — powers the folder browser in settings.
-    const p = expand(url.searchParams.get("path") || "~");
+    // List subdirectories — powers the folder browser. Browsing is limited to
+    // the home directory and configured roots; the daemon user can read more,
+    // but the API shouldn't hand it out.
+    const p = path.resolve(expand(url.searchParams.get("path") || "~"));
+    const allowedUnder = [os.homedir(), ...cfg.projectRoots.map((r) => path.resolve(expand(r)))];
+    if (!allowedUnder.some((base) => p === base || p.startsWith(base + path.sep)))
+      return json(res, 403, { error: "browsing is limited to your home directory and project roots" });
     try {
       const dirs = fs.readdirSync(p, { withFileTypes: true })
         .filter((e) => e.isDirectory() && !e.name.startsWith("."))
@@ -686,7 +787,9 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     if (!validSvcName(n)) return json(res, 400, { error: "service name must be letters/digits/dot/dash/underscore, max 64 chars" });
     if (n !== name && findSvc(n)) return json(res, 409, { error: "a service with that name already exists" });
     s.name = n;
-    // Carry live runtime state across the rename (works mid-run).
+    // Carry live runtime state across the rename (works mid-run). The log
+    // stream is closed so future writes open a file under the new name.
+    if (logStreams[name]) { logStreams[name].end(); delete logStreams[name]; }
     for (const map of [procs, buffers, clients])
       if (name in map) { map[n] = map[name]; delete map[name]; }
     saveCfg();
@@ -701,6 +804,12 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     let s = findSvc(b.name);
     if (s && procs[s.name] && procs[s.name].child.exitCode === null)
       return json(res, 409, { error: "stop the service before editing it" });
+    if (typeof b.dir !== "string" || b.dir.length > 512) return json(res, 400, { error: "bad dir" });
+    let dirStat = null;
+    try { dirStat = fs.statSync(expand(b.dir.trim())); } catch {}
+    if (!dirStat || !dirStat.isDirectory()) return json(res, 400, { error: `not a directory: ${b.dir}` });
+    if (typeof b.command !== "string" || b.command.length > 4096) return json(res, 400, { error: "bad command" });
+    if (b.env !== undefined && !validEnv(b.env)) return json(res, 400, { error: "env must be a flat object of string values with valid names" });
     if (b.port !== undefined && b.port !== null && b.port !== "") {
       const p = Number(b.port);
       if (!Number.isInteger(p) || p < 1 || p > 65535) return json(res, 400, { error: "port must be 1–65535" });
@@ -709,7 +818,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     if (!s) { s = { name: b.name }; cfg.services.push(s); }
     s.dir = b.dir; s.command = b.command;
     s.port = b.port;
-    s.env = b.env && typeof b.env === "object" ? b.env : (s.env || {});
+    s.env = b.env !== undefined ? b.env : (s.env || {});
     if (b.envFile !== undefined) { // false disables .env auto-load; string picks a file
       if (b.envFile === false || typeof b.envFile === "string") s.envFile = b.envFile;
       else delete s.envFile;
@@ -738,9 +847,13 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     const name = url.searchParams.get("name");
     if (!findSvc(name)) return json(res, 404, { error: "unknown service" });
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    res.write(":connected\n\n"); // SSE comment: flushes headers even when the buffer is empty
     for (const l of (buffers[name] || []).slice(-300)) res.write(`data: ${JSON.stringify(l)}\n\n`);
-    (clients[name] = clients[name] || new Set()).add(res);
-    req.on("close", () => clients[name].delete(res));
+    // Capture the Set itself: after a service rename the map key changes, and
+    // a close handler holding the old name would throw on a missing entry.
+    const set = (clients[name] = clients[name] || new Set());
+    set.add(res);
+    req.on("close", () => set.delete(res));
     return;
   }
 

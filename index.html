@@ -276,6 +276,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
+const TOKEN = "__STACKDECK_TOKEN__"; // injected by the daemon when serving this page
 const $svc = document.getElementById("services");
 const $proj = document.getElementById("projects");
 const $toast = document.getElementById("toast");
@@ -343,7 +344,9 @@ function toast(msg, err) {
 }
 
 async function api(path, body) {
-  const r = await fetch(path, body ? { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) } : {});
+  const headers = { "X-Stackdeck-Token": TOKEN };
+  if (body) headers["Content-Type"] = "application/json";
+  const r = await fetch(path, body ? { method:"POST", headers, body: JSON.stringify(body) } : { headers });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
@@ -716,7 +719,7 @@ function attachStream(name) {
   const pane = document.getElementById("log-" + name);
   if (!pane) return;
   pane.innerHTML = "";
-  const es = new EventSource("/api/logs?name=" + encodeURIComponent(name));
+  const es = new EventSource("/api/logs?name=" + encodeURIComponent(name) + "&t=" + TOKEN);
   es.onmessage = (ev) => {
     pane.insertAdjacentHTML("beforeend", ansiToHtml(JSON.parse(ev.data)) + "\n");
     while (pane.childNodes.length > 6000) pane.removeChild(pane.firstChild);

@@ -12,11 +12,23 @@
  */
 "use strict";
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
 const { spawn, execFileSync } = require("child_process");
 
 const SERVER = path.join(__dirname, "..", "server.js");
 const PORT = Number(process.env.STACKDECK_PORT || 8899);
 const BASE = `http://127.0.0.1:${PORT}`;
+
+// The API requires the per-install secret; same-user processes read it from disk.
+function stateHome() {
+  if (process.env.STACKDECK_HOME)
+    return process.env.STACKDECK_HOME.replace(/^~(?=\/|$)/, os.homedir());
+  const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+  return path.join(xdg, "stackdeck");
+}
+const token = () => { try { return fs.readFileSync(path.join(stateHome(), "secret"), "utf8").trim(); } catch { return ""; } };
+const authHeaders = () => ({ "X-Stackdeck-Token": token() });
 
 async function up() {
   try { const r = await fetch(`${BASE}/api/meta`); return r.ok; } catch { return false; }
@@ -36,7 +48,7 @@ async function ensureDaemon() {
 
 async function post(pathname, body) {
   const r = await fetch(BASE + pathname, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { console.error("error:", j.error || r.statusText); process.exit(1); }
@@ -63,7 +75,7 @@ function openBrowser(url) {
   }
   if (cmd === "status") {
     await ensureDaemon();
-    const d = await (await fetch(`${BASE}/api/services`)).json();
+    const d = await (await fetch(`${BASE}/api/services`, { headers: authHeaders() })).json();
     for (const s of d.services) {
       const state = s.running ? (s.managed ? "up" : "up (external)") : "down";
       console.log(`${s.running ? "●" : "○"} ${s.name.padEnd(16)} ${state.padEnd(14)} :${s.port ?? "—"}  ${s.branch ?? ""}`);
@@ -80,7 +92,7 @@ function openBrowser(url) {
   if (cmd === "logs") {
     if (!name) { console.error("usage: stackdeck logs <service>"); process.exit(1); }
     await ensureDaemon();
-    const res = await fetch(`${BASE}/api/logs?name=${encodeURIComponent(name)}`);
+    const res = await fetch(`${BASE}/api/logs?name=${encodeURIComponent(name)}`, { headers: authHeaders() });
     if (!res.ok) { console.error("error:", (await res.json()).error); process.exit(1); }
     let buf = "";
     for await (const chunk of res.body) {

@@ -80,12 +80,24 @@ editable from the UI; the interesting ones:
 
 ## Security model
 
-The daemon executes shell commands by design, so it defends its HTTP surface:
-it binds to 127.0.0.1 only, pins the `Host` header (DNS-rebinding defense),
-accepts only `application/json` POSTs (a cross-origin JSON POST forces a CORS
-preflight, which is never answered; `text/plain` sneak-POSTs are rejected),
-and rejects any browser `Origin` that isn't its own. Service and section
-names are validated server-side. Do not port-forward it off your machine.
+The daemon executes shell commands by design, and **localhost is not a
+security boundary** — so the API is gated by a per-install secret
+(`<state dir>/secret`, mode 0600). The web page receives the token by being
+served from disk by the daemon itself; the CLI reads it as the same user.
+Every `/api/*` call without it gets a 401.
+
+Layered on top: the daemon binds to 127.0.0.1 only, pins the `Host` header
+(DNS-rebinding defense), accepts only `application/json` POSTs (a cross-origin
+JSON POST forces a CORS preflight, which is never answered; `text/plain`
+sneak-POSTs are rejected), rejects foreign `Origin` headers, validates
+service/section names, ports, dirs, and env server-side, limits request bodies
+to 1MB, and restricts the folder browser to your home directory and configured
+roots. Config writes are atomic; a corrupt config is set aside, never fatal.
+Logs rotate at 5MB per service. Do not port-forward the daemon off your machine.
+
+Stackdeck is **Unix-only** (macOS/Linux): it relies on bash, process groups,
+and lsof/ss. The `.env` loader is intentionally minimal — flat `KEY=value`
+lines, quotes and `#` comments handled, no interpolation or multiline values.
 
 ## Notes that will save you a debugging session
 
