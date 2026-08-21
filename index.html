@@ -142,6 +142,36 @@
   .chev { display:inline-block; transition:transform .15s ease-out; font-size:10px; color:var(--faint); }
   .chev.closed { transform:rotate(-90deg); }
 
+  /* settings: folder tree */
+  .cfg-label { font-size:11.5px; font-weight:600; color:var(--dim); letter-spacing:.04em; margin:2px 0 8px; }
+  .cfg-label .count { color:var(--faint); font-weight:500; }
+  .root-row {
+    display:flex; align-items:center; gap:10px; padding:6px 0;
+    font-family:var(--mono); font-size:12.5px;
+  }
+  .root-row .chev { cursor:pointer; padding:4px; }
+  .child-grid {
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));
+    gap:2px 14px; padding:6px 0 12px 24px;
+  }
+  .child-grid label {
+    display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
+    color:var(--text); cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .child-grid label.off { color:var(--faint); text-decoration:line-through; }
+  .child-grid input { accent-color:var(--accent); }
+  .browser {
+    border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:8px 0;
+    max-width:560px; background:var(--bg);
+  }
+  .browser .crumb { font-family:var(--mono); font-size:12px; color:var(--dim); margin-bottom:8px; word-break:break-all; }
+  .browser .dirs { max-height:220px; overflow:auto; display:grid; gap:1px; }
+  .browser .dirs button {
+    text-align:left; background:transparent; border-color:transparent; color:var(--text);
+    font:500 12.5px var(--mono); padding:3px 8px;
+  }
+  .browser .dirs button:hover { background:var(--surface-2); }
+
   .toast {
     position:fixed; bottom:22px; left:50%; transform:translate(-50%, 8px);
     background:var(--surface-2); border:1px solid var(--border); border-radius:9px;
@@ -163,17 +193,16 @@
 </header>
 <main>
   <div class="ledger" id="settings" style="display:none; margin-top:18px">
-    <div class="drawer open" style="padding:14px 16px">
-      <div class="fields" style="grid-template-columns:110px 1fr">
-        <label>project roots</label>
-        <textarea id="cfg-roots" rows="2" placeholder="~/Projects&#10;~/work — one folder per line"></textarea>
-        <label>category order</label>
-        <textarea id="cfg-cats" rows="3" placeholder="one category per line; unlisted ones sort alphabetically, Uncategorized last"></textarea>
-        <label></label>
-        <div style="display:flex; gap:8px; align-items:center">
-          <button onclick="saveConfig()">Save</button>
-          <span class="cmdline" id="cfg-path"></span>
-        </div>
+    <div class="drawer open" style="padding:16px 18px">
+      <div class="cfg-label">Scanned folders <span class="count">tick a subfolder to include it, untick to exclude</span></div>
+      <div id="cfg-roots-list"></div>
+      <div id="cfg-browser" style="display:none"></div>
+      <button class="ghost" onclick="browseFolders()">+ add folder…</button>
+      <div class="cfg-label" style="margin-top:16px">Category order</div>
+      <textarea id="cfg-cats" rows="3" placeholder="one category per line; unlisted ones sort alphabetically, Uncategorized last" style="max-width:560px"></textarea>
+      <div style="display:flex; gap:10px; align-items:center; margin-top:12px">
+        <button onclick="saveConfig()">Save</button>
+        <span class="cmdline" id="cfg-path"></span>
       </div>
     </div>
   </div>
@@ -617,23 +646,111 @@ async function refreshProjects() {
       : "rescanned — no changes");
 }
 
-/* ---------- settings ---------- */
+/* ---------- settings (VLC-style folder tree) ---------- */
 
 let meta = null;
+const pending = { roots: [], excludes: new Set(), openRoots: new Set() };
+const shortP = (p) => p.replace(/^\/(Users|home)\/[^/]+/, "~");
+
 function toggleSettings() {
   const el = document.getElementById("settings");
   const show = el.style.display === "none";
   el.style.display = show ? "" : "none";
   if (show && meta) {
-    document.getElementById("cfg-roots").value = meta.projectRoots.join("\n");
+    pending.roots = [...meta.projectRoots];
+    pending.excludes = new Set(meta.excludes || []);
+    pending.openRoots = new Set(pending.roots); // expanded by default, like VLC
     document.getElementById("cfg-cats").value = (meta.categoryOrder || []).join("\n");
-    document.getElementById("cfg-path").textContent = "saved to " + meta.configPath;
+    document.getElementById("cfg-path").textContent = "saved to " + shortP(meta.configPath);
+    document.getElementById("cfg-browser").style.display = "none";
+    renderRoots();
   }
 }
-async function saveConfig() {
-  const lines = (id) => document.getElementById(id).value.split("\n").map(s => s.trim()).filter(Boolean);
+
+async function renderRoots() {
+  const box = document.getElementById("cfg-roots-list");
+  const blocks = await Promise.all(pending.roots.map(async (root) => {
+    const rArg = `decodeURIComponent('${encodeURIComponent(root)}')`;
+    const isOpen = pending.openRoots.has(root);
+    let children = "";
+    if (isOpen) {
+      try {
+        const fsList = await api("/api/fs?path=" + encodeURIComponent(root));
+        children = `<div class="child-grid">` + fsList.dirs.map(d => {
+          const full = (fsList.path.endsWith("/") ? fsList.path : fsList.path + "/") + d;
+          const off = pending.excludes.has(full);
+          const fArg = `decodeURIComponent('${encodeURIComponent(full)}')`;
+          return `<label class="${off ? "off" : ""}">
+            <input type="checkbox" ${off ? "" : "checked"} onchange="toggleExclude(${fArg}, this.checked)"> ${esc(d)}
+          </label>`;
+        }).join("") + `</div>`;
+      } catch (e) { children = `<div class="child-grid"><span class="cmdline">${esc(e.message)}</span></div>`; }
+    }
+    return `<div class="root-row">
+        <span class="chev ${isOpen ? "" : "closed"}" onclick="toggleRootOpen(${rArg})">▾</span>
+        <b>${esc(shortP(root))}</b>
+        <button class="ghost" onclick="removeRoot(${rArg})">remove</button>
+      </div>${children}`;
+  }));
+  box.innerHTML = blocks.join("") ||
+    '<div class="cmdline" style="padding:6px 0">no folders yet — add one below</div>';
+}
+
+function toggleRootOpen(root) {
+  pending.openRoots.has(root) ? pending.openRoots.delete(root) : pending.openRoots.add(root);
+  renderRoots();
+}
+function toggleExclude(full, included) {
+  included ? pending.excludes.delete(full) : pending.excludes.add(full);
+  renderRoots();
+}
+function removeRoot(root) {
+  pending.roots = pending.roots.filter(r => r !== root);
+  renderRoots();
+}
+
+/* folder browser for adding a root */
+let browsePath = null;
+async function browseFolders(p) {
+  const box = document.getElementById("cfg-browser");
+  box.style.display = "";
   try {
-    await api("/api/config", { projectRoots: lines("cfg-roots"), categoryOrder: lines("cfg-cats") });
+    const d = await api("/api/fs?path=" + encodeURIComponent(p || browsePath || "~"));
+    browsePath = d.path;
+    const up = `decodeURIComponent('${encodeURIComponent(d.parent)}')`;
+    box.innerHTML = `<div class="browser">
+      <div class="crumb">${esc(shortP(d.path))}</div>
+      <div class="dirs">
+        <button onclick="browseFolders(${up})">⬑ ..</button>
+        ${d.dirs.map(n => {
+          const full = `decodeURIComponent('${encodeURIComponent((d.path.endsWith("/") ? d.path : d.path + "/") + n)}')`;
+          return `<button onclick="browseFolders(${full})">${esc(n)}/</button>`;
+        }).join("")}
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px">
+        <button class="add" onclick="pickRoot()">scan this folder</button>
+        <button class="ghost" onclick="document.getElementById('cfg-browser').style.display='none'">cancel</button>
+      </div>
+    </div>`;
+  } catch (e) { toast(e.message, true); }
+}
+function pickRoot() {
+  if (browsePath && !pending.roots.includes(browsePath)) {
+    pending.roots.push(browsePath);
+    pending.openRoots.add(browsePath);
+  }
+  document.getElementById("cfg-browser").style.display = "none";
+  renderRoots();
+}
+
+async function saveConfig() {
+  const cats = document.getElementById("cfg-cats").value.split("\n").map(s => s.trim()).filter(Boolean);
+  try {
+    await api("/api/config", {
+      projectRoots: pending.roots,
+      excludes: [...pending.excludes],
+      categoryOrder: cats,
+    });
     toast("settings saved");
     document.getElementById("settings").style.display = "none";
     await loadMeta();

@@ -174,12 +174,14 @@ function inferCommand(dir) {
 
 function scanProjects() {
   const out = [];
+  const excluded = new Set((cfg.excludes || []).map(expand));
   for (const root of cfg.projectRoots.map(expand)) {
     let entries;
     try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith(".")) continue;
       const dir = path.join(root, e.name);
+      if (excluded.has(dir)) continue;
       out.push({
         name: e.name,
         dir,
@@ -289,6 +291,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       logDir: LOG_DIR,
       projectRoots: cfg.projectRoots,
       categoryOrder: cfg.categoryOrder || [],
+      excludes: cfg.excludes || [],
     });
 
   if (req.method === "POST" && url.pathname === "/api/config") {
@@ -304,9 +307,25 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     }
     const order = strList(b.categoryOrder);
     if (order !== null) cfg.categoryOrder = order;
+    const excludes = strList(b.excludes);
+    if (excludes !== null) cfg.excludes = excludes;
     saveCfg();
     projCache.t = 0;
     return json(res, 200, { ok: true });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/fs") {
+    // List subdirectories of a path — powers the folder browser in settings.
+    const p = expand(url.searchParams.get("path") || "~");
+    try {
+      const dirs = fs.readdirSync(p, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b));
+      return json(res, 200, { path: p, parent: path.dirname(p), dirs });
+    } catch (e) {
+      return json(res, 400, { error: e.message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/services")
