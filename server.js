@@ -7,8 +7,8 @@
  *   node server.js            run in foreground
  *   devboard                  (CLI) start daemon + open the board
  *
- * State lives in $DEVBOARD_HOME, else ~/.devboard (legacy, if present),
- * else $XDG_CONFIG_HOME/devboard (default ~/.config/devboard):
+ * State lives in $DEVBOARD_HOME, else $XDG_CONFIG_HOME/devboard
+ * (default ~/.config/devboard):
  *   config.json   services, sections, project roots, categories
  *   logs/         one log file per service + the daemon's own log
  */
@@ -25,13 +25,20 @@ const ROOT = __dirname;
 /* ---------- state directory & config ---------- */
 
 const expand = (p) => (p && p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p);
+// Locale-independent sort, so listings are identical on every machine.
+const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 function resolveHome() {
   if (process.env.DEVBOARD_HOME) return expand(process.env.DEVBOARD_HOME);
-  const legacy = path.join(os.homedir(), ".devboard");
-  if (fs.existsSync(path.join(legacy, "config.json"))) return legacy;
   const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  return path.join(xdg, "devboard");
+  const home = path.join(xdg, "devboard");
+  // One-time migration from the pre-0.1 location (~/.devboard).
+  const legacy = path.join(os.homedir(), ".devboard");
+  if (!fs.existsSync(home) && fs.existsSync(path.join(legacy, "config.json"))) {
+    try { fs.mkdirSync(path.dirname(home), { recursive: true }); fs.renameSync(legacy, home); }
+    catch { return legacy; } // cross-device or permission issue: stay on the old path
+  }
+  return home;
 }
 
 const HOME_DIR = resolveHome();
@@ -274,8 +281,8 @@ function scanProjects() {
         continue;
       }
       // Container folder: not a repo itself, but may hold repos one level
-      // down (e.g. symphony/repo.symphony_appstore). Surface those instead,
-      // inheriting the container's category unless mapped individually.
+      // down (e.g. work/team-api). Surface those instead, inheriting the
+      // container's category unless mapped individually.
       const subs = lsDirs(dir)
         .map((s) => path.join(dir, s.name))
         .filter((sdir) => !excluded.has(sdir))
@@ -290,7 +297,7 @@ function scanProjects() {
       }
     }
   }
-  out.sort((a, b) => (b.suggestedCommand ? 1 : 0) - (a.suggestedCommand ? 1 : 0) || a.name.localeCompare(b.name));
+  out.sort((a, b) => (b.suggestedCommand ? 1 : 0) - (a.suggestedCommand ? 1 : 0) || byName(a.name, b.name));
   return out;
 }
 
@@ -406,6 +413,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   if (req.method === "GET" && url.pathname === "/api/meta")
     return json(res, 200, {
       version: VERSION,
+      home: os.homedir(),
       configPath: CONFIG_PATH,
       logDir: LOG_DIR,
       projectRoots: cfg.projectRoots,
@@ -440,7 +448,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       const dirs = fs.readdirSync(p, { withFileTypes: true })
         .filter((e) => e.isDirectory() && !e.name.startsWith("."))
         .map((e) => e.name)
-        .sort((a, b) => a.localeCompare(b));
+        .sort(byName);
       return json(res, 200, { path: p, parent: path.dirname(p), dirs });
     } catch (e) {
       return json(res, 400, { error: e.message });

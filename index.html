@@ -231,7 +231,7 @@
       <button class="ghost" onclick="refreshProjects()" title="rescan project roots for new folders">↻ refresh</button>
       <button class="ghost" onclick="collapseAll('c', true)">collapse all</button>
       <button class="ghost" onclick="collapseAll('c', false)">expand all</button>
-      <input id="filter" type="search" placeholder="filter ~/Projects…" oninput="renderProjects()">
+      <input id="filter" type="search" placeholder="filter projects…" oninput="renderProjects()">
     </span>
   </div>
   <div id="projects"></div>
@@ -312,6 +312,9 @@ async function api(path, body) {
   return j;
 }
 function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+// Shorten a path with the real home dir from /api/meta (never a guessed prefix).
+function shortP(p){ return meta && meta.home && p.startsWith(meta.home) ? "~" + p.slice(meta.home.length) : p; }
+const shortDir = shortP;
 
 /* ---------- services ---------- */
 
@@ -362,7 +365,6 @@ function svcRow(s) {
   </div>`;
 }
 
-function shortDir(d){ return d.replace(/^\/Users\/[^/]+/, "~"); }
 
 function renderServices() {
   const up = services.filter(s => s.running).length;
@@ -459,7 +461,7 @@ async function move(name, group, before) {
 /* ---------- sections ---------- */
 
 async function addSection() {
-  const name = prompt("Section name (e.g. OnBehalf, Symphony, Infra):");
+  const name = prompt("Section name (e.g. Frontend, Backend, Infra):");
   if (!name || !name.trim()) return;
   try { await api("/api/group", { name: name.trim() }); loadServices(true); }
   catch (e) { toast(e.message, true); }
@@ -504,7 +506,7 @@ function renderProjects() {
   const cats = [...new Set(shown.map(p => p.category || "Uncategorized"))]
     .sort((a, b) => {
       const ia = CAT_ORDER.indexOf(a), ib = CAT_ORDER.indexOf(b);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || (a < b ? -1 : a > b ? 1 : 0);
     });
   $proj.innerHTML = cats.map(c => {
     const cHidden = hiddenCategories.includes(c);
@@ -660,7 +662,6 @@ async function refreshProjects() {
 
 let meta = null;
 const pending = { roots: [], excludes: new Set(), openRoots: new Set() };
-const shortP = (p) => p.replace(/^\/(Users|home)\/[^/]+/, "~");
 
 function toggleSettings() {
   const el = document.getElementById("settings");
@@ -803,11 +804,10 @@ async function loadMeta() {
     const m = await api("/api/meta");
     meta = m;
     if (m.categoryOrder && m.categoryOrder.length) CAT_ORDER = [...m.categoryOrder, "Uncategorized"];
-    const short = p => p.replace(/^\/(Users|home)\/[^/]+/, "~");
     document.getElementById("metaPaths").textContent =
-      `${short(m.configPath)} · v${m.version}`;
+      `${shortP(m.configPath)} · v${m.version}`;
     document.getElementById("filter").placeholder =
-      `filter ${m.projectRoots.map(short).join(", ")}…`;
+      `filter ${m.projectRoots.map(shortP).join(", ")}…`;
     renderProjects();
   } catch {}
 }
