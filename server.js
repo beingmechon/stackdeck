@@ -678,6 +678,21 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     return json(res, 200, { ok: true });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/service/rename") {
+    const { name, newName } = await readBody(req);
+    const s = findSvc(name);
+    if (!s) return json(res, 404, { error: "unknown service" });
+    const n = (newName || "").trim();
+    if (!validSvcName(n)) return json(res, 400, { error: "service name must be letters/digits/dot/dash/underscore, max 64 chars" });
+    if (n !== name && findSvc(n)) return json(res, 409, { error: "a service with that name already exists" });
+    s.name = n;
+    // Carry live runtime state across the rename (works mid-run).
+    for (const map of [procs, buffers, clients])
+      if (name in map) { map[n] = map[name]; delete map[name]; }
+    saveCfg();
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/service") {
     const b = await readBody(req);
     if (!b.name || !b.dir || !b.command) return json(res, 400, { error: "name, dir, command are required" });

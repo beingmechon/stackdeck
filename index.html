@@ -353,6 +353,7 @@ function svcRow(s) {
     </div>
     <div class="drawer ${open.has(s.name) ? "open" : ""}" id="edit-${s.name}">
       <div class="fields">
+        <label>name</label><input id="name-${s.name}" value="${esc(s.name)}">
         <label>dir</label><input id="dir-${s.name}" value="${esc(s.dir)}">
         <label>command</label><textarea id="cmd-${s.name}">${esc(s.command)}</textarea>
         <label>port</label><input id="port-${s.name}" value="${s.port ?? ""}" placeholder="for status detection">
@@ -688,14 +689,28 @@ async function saveSvc(name) {
   try { env = JSON.parse(document.getElementById("env-" + name).value || "{}"); }
   catch { return toast("env must be valid JSON", true); }
   try {
-    await api("/api/service", {
-      name,
+    let finalName = name;
+    const wanted = document.getElementById("name-" + name).value.trim();
+    if (wanted && wanted !== name) {
+      await api("/api/service/rename", { name, newName: wanted });
+      if (logOpen.has(name)) { logOpen.delete(name); logOpen.add(wanted); streams[name]?.close(); delete streams[name]; }
+      finalName = wanted;
+    }
+    const cur = services.find(x => x.name === name) || {};
+    const body = {
+      name: finalName,
       dir: document.getElementById("dir-" + name).value.trim(),
       command: document.getElementById("cmd-" + name).value.trim(),
       port: document.getElementById("port-" + name).value.trim() || undefined,
       env,
-    });
-    toast(name + " saved"); open.delete(name); load();
+    };
+    // Rename works mid-run; the other fields need a stopped service. Skip the
+    // field save when nothing but the name changed, so renaming while running
+    // doesn't half-fail.
+    const fieldsChanged = body.dir !== cur.dir || body.command !== cur.command ||
+      String(body.port ?? "") !== String(cur.port ?? "") || JSON.stringify(env) !== JSON.stringify(cur.env || {});
+    if (fieldsChanged) await api("/api/service", body);
+    toast(finalName + " saved"); open.delete(name); load();
   } catch (e) { toast(e.message, true); }
 }
 async function delSvc(name) {
