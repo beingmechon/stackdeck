@@ -1,9 +1,9 @@
-# DevBoard
+# Stackdeck
 
 **Your projects folder, as a control panel.**
 
 A browser dashboard for the services you run every day in local development.
-DevBoard scans your projects folder, figures out how to run each repo, and
+Stackdeck scans your projects folder, figures out how to run each repo, and
 gives you Start / Kill / restart buttons, live logs, and a **git branch
 dropdown** that checks out the branch before launching. Zero dependencies —
 one Node process, one HTML page, binds to 127.0.0.1.
@@ -16,14 +16,14 @@ neither has.*
 ## Quick start
 
 ```bash
-git clone https://github.com/bharanishraj/devboard && cd devboard
-node bin/devboard.js         # starts the daemon, opens http://localhost:8899
+git clone https://github.com/bharanishraj/stackdeck && cd stackdeck
+node bin/stackdeck.js         # starts the daemon, opens http://localhost:8899
 ```
 
 Or link it onto your PATH:
 
 ```bash
-npm link                     # then: devboard | devboard status | devboard logs api
+npm link                     # then: stackdeck | stackdeck status | stackdeck logs api
 ```
 
 ## What it does
@@ -35,27 +35,27 @@ npm link                     # then: devboard | devboard status | devboard logs 
 - **Services** — a project you've promoted to a runnable recipe: directory +
   command + port + env. Start / Kill / restart from the browser or CLI, live
   ANSI-colored logs (also on disk), status by pid *and* port — services
-  started outside DevBoard show as `external` and can be killed too.
+  started outside Stackdeck show as `external` and can be killed too.
 - **Git-aware** — a branch dropdown per service; picking a branch runs
   `git checkout` before start, refused while the tree is dirty. Dirty repos
   are badged.
 - **Organize the board** — drag rows between your own sections, per-section
   *start all* / *stop all*, collapse/expand, hide/unhide anything, categorize
   the project list.
-- **CLI parity** — `devboard status|start|stop|restart|logs <name>` talks to
+- **CLI parity** — `stackdeck status|start|stop|restart|logs <name>` talks to
   the same daemon.
 - **Dev tools** — detects databases and brokers installed on your machine
   (PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey, Elasticsearch/OpenSearch,
   RabbitMQ, NATS, MinIO, Temporal, ClickHouse, Mailpit, Memcached) and
   one-click configures them as ordinary foreground services — managed child,
   streamed logs, clean kill. Data directories are resolved from standard
-  locations (or self-initialized under `~/.local/share/devboard/`); no Docker,
+  locations (or self-initialized under `~/.local/share/stackdeck/`); no Docker,
   no launchd/systemd indirection.
 
 ## Configuration
 
-Everything lives in one JSON file — `~/.config/devboard/config.json`
-(or `$DEVBOARD_HOME/config.json`); logs sit next to it. Every field is
+Everything lives in one JSON file — `~/.config/stackdeck/config.json`
+(or `$STACKDECK_HOME/config.json`); logs sit next to it. Every field is
 editable from the UI; the interesting ones:
 
 ```jsonc
@@ -101,10 +101,10 @@ names are validated server-side. Do not port-forward it off your machine.
 ## macOS app (optional)
 
 ```bash
-./scripts/macos-app.sh    # builds ~/Applications/DevBoard.app from this checkout
+./scripts/macos-app.sh    # builds ~/Applications/Stackdeck.app from this checkout
 ```
 
-Double-click to start the daemon and open the board. Linux users: `devboard`
+Double-click to start the daemon and open the board. Linux users: `stackdeck`
 in a terminal, or add a systemd user unit for `node server.js`.
 
 ## Status

@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 /**
- * devboard CLI — same daemon as the web board.
+ * stackdeck CLI — same daemon as the web board.
  *
- *   devboard                start the daemon (if down) and open the board
- *   devboard daemon         run the daemon in the foreground
- *   devboard status         list services and their state
- *   devboard start <name>   start a service
- *   devboard stop <name>    stop a service
- *   devboard restart <name> restart a service
- *   devboard logs <name>    stream a service's logs (Ctrl-C to quit)
+ *   stackdeck                start the daemon (if down) and open the board
+ *   stackdeck daemon         run the daemon in the foreground
+ *   stackdeck status         list services and their state
+ *   stackdeck start <name>   start a service
+ *   stackdeck stop <name>    stop a service
+ *   stackdeck restart <name> restart a service
+ *   stackdeck logs <name>    stream a service's logs (Ctrl-C to quit)
  */
 "use strict";
 const path = require("path");
 const { spawn, execFileSync } = require("child_process");
 
 const SERVER = path.join(__dirname, "..", "server.js");
-const PORT = Number(process.env.DEVBOARD_PORT || 8899);
+const PORT = Number(process.env.STACKDECK_PORT || 8899);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 async function up() {
@@ -30,7 +30,7 @@ async function ensureDaemon() {
     if (await up()) return;
     await new Promise((ok) => setTimeout(ok, 250));
   }
-  console.error("daemon did not come up — try: devboard daemon");
+  console.error("daemon did not come up — try: stackdeck daemon");
   process.exit(1);
 }
 
@@ -53,7 +53,7 @@ function openBrowser(url) {
 
   if (!cmd || cmd === "up" || cmd === "open") {
     await ensureDaemon();
-    console.log(`devboard · ${BASE}`);
+    console.log(`stackdeck · ${BASE}`);
     openBrowser(BASE);
     return;
   }
@@ -71,14 +71,14 @@ function openBrowser(url) {
     return;
   }
   if (["start", "stop", "restart"].includes(cmd)) {
-    if (!name) { console.error(`usage: devboard ${cmd} <service>`); process.exit(1); }
+    if (!name) { console.error(`usage: stackdeck ${cmd} <service>`); process.exit(1); }
     await ensureDaemon();
     await post(`/api/${cmd}`, { name });
     console.log(`${name}: ${cmd} ok`);
     return;
   }
   if (cmd === "logs") {
-    if (!name) { console.error("usage: devboard logs <service>"); process.exit(1); }
+    if (!name) { console.error("usage: stackdeck logs <service>"); process.exit(1); }
     await ensureDaemon();
     const res = await fetch(`${BASE}/api/logs?name=${encodeURIComponent(name)}`);
     if (!res.ok) { console.error("error:", (await res.json()).error); process.exit(1); }

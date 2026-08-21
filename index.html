@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DevBoard</title>
+<title>Stackdeck</title>
 <style>
   :root {
     --bg:        oklch(0.145 0.008 75);
@@ -226,7 +226,7 @@
 </head>
 <body>
 <header>
-  <h1><span>▲</span> DevBoard</h1>
+  <h1><span>▲</span> Stackdeck</h1>
   <span id="summary"></span>
   <span class="spacer"></span>
   <button class="ghost" id="hiddenToggle" onclick="toggleHidden()" title="show/hide the items you've hidden"></button>
@@ -283,8 +283,8 @@ let services = [], projects = [], groups = [];
 let hiddenGroups = [], hiddenCategories = [], showHidden = false;
 
 /* collapse state: keys "g:<group>" (services) and "c:<category>" (projects) */
-const collapsed = new Set(JSON.parse(localStorage.getItem("devboard.collapsed") || "[]"));
-function saveCollapsed() { localStorage.setItem("devboard.collapsed", JSON.stringify([...collapsed])); }
+const collapsed = new Set(JSON.parse(localStorage.getItem("stackdeck.collapsed") || "[]"));
+function saveCollapsed() { localStorage.setItem("stackdeck.collapsed", JSON.stringify([...collapsed])); }
 function toggleCollapse(key) {
   collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
   saveCollapsed();
@@ -374,7 +374,7 @@ function svcRow(s) {
             ondragstart="dragStart(event,'${esc(s.name)}')" ondragend="dragEnd()">⠿</span>
       <span class="dot ${s.running ? "up" : ""}"></span>
       <span class="svc-name">${esc(s.name)}</span>
-      ${s.running && !s.managed ? '<span class="badge ext" title="running, but not started from DevBoard">external</span>' : ""}
+      ${s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
       <span class="addr">:${s.port ?? "—"}${s.pid ? " · " + s.pid : ""}</span>
       <span class="grow cmdline" title="${esc(s.dir)}">${esc(shortDir(s.dir))} · <b>${esc(s.command)}</b></span>
       ${branch}
@@ -753,7 +753,7 @@ async function saveSvc(name) {
   } catch (e) { toast(e.message, true); }
 }
 async function delSvc(name) {
-  if (!confirm("Remove '" + name + "' from DevBoard? (the project itself is untouched)")) return;
+  if (!confirm("Remove '" + name + "' from Stackdeck? (the project itself is untouched)")) return;
   try { await api("/api/service/delete", { name }); toast(name + " removed"); load(); }
   catch (e) { toast(e.message, true); }
 }
@@ -774,7 +774,7 @@ async function loadServices(force) {
     hiddenGroups = d.hiddenGroups || []; hiddenCategories = d.hiddenCategories || [];
     renderServices();
   }
-  catch (e) { toast("DevBoard server unreachable: " + e.message, true); }
+  catch (e) { toast("Stackdeck server unreachable: " + e.message, true); }
 }
 /* ---------- dev tools (infra) ---------- */
 

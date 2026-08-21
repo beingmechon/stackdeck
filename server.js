@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * DevBoard daemon — your projects folder, as a control panel.
+ * Stackdeck daemon — your projects folder, as a control panel.
  *
  * Zero dependencies (Node >= 18 builtins only). Binds to 127.0.0.1.
  *
  *   node server.js            run in foreground
- *   devboard                  (CLI) start daemon + open the board
+ *   stackdeck                  (CLI) start daemon + open the board
  *
- * State lives in $DEVBOARD_HOME, else $XDG_CONFIG_HOME/devboard
- * (default ~/.config/devboard):
+ * State lives in $STACKDECK_HOME, else $XDG_CONFIG_HOME/stackdeck
+ * (default ~/.config/stackdeck):
  *   config.json   services, sections, project roots, categories
  *   logs/         one log file per service + the daemon's own log
  */
@@ -29,12 +29,12 @@ const expand = (p) => (p && p.startsWith("~") ? path.join(os.homedir(), p.slice(
 const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 function resolveHome() {
-  if (process.env.DEVBOARD_HOME) return expand(process.env.DEVBOARD_HOME);
+  if (process.env.STACKDECK_HOME) return expand(process.env.STACKDECK_HOME);
   const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-  const home = path.join(xdg, "devboard");
-  // One-time migration from the pre-0.1 location (~/.devboard).
-  const legacy = path.join(os.homedir(), ".devboard");
-  if (!fs.existsSync(home) && fs.existsSync(path.join(legacy, "config.json"))) {
+  const home = path.join(xdg, "stackdeck");
+  // One-time migration from pre-rename (devboard) and pre-0.1 (~/.devboard) locations.
+  for (const legacy of [path.join(xdg, "devboard"), path.join(os.homedir(), ".devboard")]) {
+    if (fs.existsSync(home) || !fs.existsSync(path.join(legacy, "config.json"))) continue;
     try { fs.mkdirSync(path.dirname(home), { recursive: true }); fs.renameSync(legacy, home); }
     catch { return legacy; } // cross-device or permission issue: stay on the old path
   }
@@ -307,7 +307,7 @@ function scanProjects() {
    DBngin-style: databases and brokers run as ordinary foreground services —
    managed child, streamed logs, clean kill — no daemons, no Docker required. */
 
-const DATA_HOME = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "devboard");
+const DATA_HOME = path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "stackdeck");
 const firstDir = (cands) => cands.map(expand).find((c) => c && fs.existsSync(c)) || null;
 const own = (sub) => `mkdir -p ${DATA_HOME}/${sub} && `; // self-initializing data dir
 
@@ -384,7 +384,7 @@ function startService(s, branch) {
         return { code: 409, error: `cannot switch to '${branch}': working tree has uncommitted changes` };
       const co = git(dir, "checkout", branch);
       if (!co.ok) return { code: 500, error: `git checkout ${branch} failed: ${co.out}` };
-      pushLog(s.name, `[devboard] checked out branch '${branch}'\n`);
+      pushLog(s.name, `[stackdeck] checked out branch '${branch}'\n`);
     }
   }
 
@@ -393,7 +393,7 @@ function startService(s, branch) {
   const envFile = s.envFile === false ? null : path.join(dir, s.envFile || ".env");
   const fileEnv = envFile && fs.existsSync(envFile) ? parseEnvFile(envFile) : {};
   const n = Object.keys(fileEnv).length;
-  if (n) pushLog(s.name, `[devboard] loaded ${path.basename(envFile)} (${n} vars)\n`);
+  if (n) pushLog(s.name, `[stackdeck] loaded ${path.basename(envFile)} (${n} vars)\n`);
 
   // Non-login, non-interactive shell: inherits the daemon's resolved PATH and
   // avoids surprises from profile files reordering toolchains.
@@ -406,11 +406,11 @@ function startService(s, branch) {
   child.stdout.on("data", (d) => pushLog(s.name, d));
   child.stderr.on("data", (d) => pushLog(s.name, d));
   child.on("exit", (code, sig) => {
-    pushLog(s.name, `[devboard] exited (code=${code} signal=${sig})\n`);
+    pushLog(s.name, `[stackdeck] exited (code=${code} signal=${sig})\n`);
     delete procs[s.name];
   });
   procs[s.name] = { child, startedAt: Date.now(), branch: branch || null };
-  pushLog(s.name, `[devboard] started: ${s.command} (pid ${child.pid})\n`);
+  pushLog(s.name, `[stackdeck] started: ${s.command} (pid ${child.pid})\n`);
   return { code: 200, ok: true, pid: child.pid };
 }
 
@@ -425,7 +425,7 @@ function stopService(s) {
   const ext = portPid(s.port);
   if (ext) {
     try { process.kill(ext, "SIGTERM"); } catch (e) { return { code: 500, error: `kill ${ext} failed: ${e.message}` }; }
-    pushLog(s.name, `[devboard] killed external pid ${ext} on port ${s.port}\n`);
+    pushLog(s.name, `[stackdeck] killed external pid ${ext} on port ${s.port}\n`);
     return { code: 200, ok: true, stopped: ext, external: true };
   }
   return { code: 409, error: `${s.name} is not running` };
@@ -450,7 +450,7 @@ const readBody = (req) => new Promise((resolve) => {
 });
 const json = (res, code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
 
-const PORT = Number(process.env.DEVBOARD_PORT || cfg.port || 8899);
+const PORT = Number(process.env.STACKDECK_PORT || cfg.port || 8899);
 const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:${PORT}`]);
 
 // Names are used in log-file paths and rendered in the UI — keep them tame.
@@ -748,5 +748,5 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
 });
 
 server.listen(PORT, "127.0.0.1", () =>
-  console.log(`devboard v${VERSION} · http://localhost:${PORT} · config ${CONFIG_PATH}`)
+  console.log(`stackdeck v${VERSION} · http://localhost:${PORT} · config ${CONFIG_PATH}`)
 );
