@@ -254,6 +254,7 @@ function pushLog(name, chunk) {
   }
   logStream(name).write(chunk);
   if ((logWrites[name] = (logWrites[name] || 0) + 1) % 500 === 0) maybeRotate(name);
+  notifyLogWaiters(name, lines); // readiness checks watch the live stream
   for (const res of clients[name] || []) {
     try { for (const l of lines) res.write(`data: ${JSON.stringify(l)}\n\n`); } catch {}
   }
@@ -289,6 +290,8 @@ function serviceState(s) {
     pid,
     startedBranch: p ? p.branch : null,
     startedAt: p ? p.startedAt : null,
+    lastExit: lastExit[s.name] || null,
+    restartPending: !!(restarts[s.name] && restarts[s.name].timer && !managedUp && restarts[s.name].n > 0 && restarts[s.name].n <= 5),
     branch: g.branch, branches: g.branches, dirty: g.dirty, isGit: g.isGit,
   };
 }
@@ -414,6 +417,58 @@ function inferCommand(dir) {
   return null;
 }
 
+/**
+ * Multi-process repos: a Procfile, docker-compose services, or pnpm workspace
+ * packages mean one repo is really several services. Returns [{name, command,
+ * dir}] when there's more than one, else null.
+ */
+function detectProcs(dir) {
+  const has = (f) => fs.existsSync(path.join(dir, f));
+  const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
+  try {
+    for (const pf of ["Procfile.dev", "Procfile"]) if (has(pf)) {
+      const procs = [];
+      for (const line of read(pf).split("\n")) {
+        const m = line.match(/^([A-Za-z0-9_-]+):\s*(.+?)\s*$/);
+        if (m && !m[2].startsWith("#")) procs.push({ name: m[1], command: m[2], dir });
+      }
+      if (procs.length > 1) return procs;
+    }
+    if (has("pnpm-workspace.yaml")) {
+      const procs = [];
+      const globs = [...read("pnpm-workspace.yaml").matchAll(/^\s*-\s*['"]?([^'"\s#]+)/gm)].map((m) => m[1]);
+      for (const g of globs) {
+        const bases = g.endsWith("/*") ? (() => {
+          try {
+            return fs.readdirSync(path.join(dir, g.slice(0, -2)), { withFileTypes: true })
+              .filter((e) => e.isDirectory()).map((e) => path.join(g.slice(0, -2), e.name));
+          } catch { return []; }
+        })() : [g];
+        for (const rel of bases) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(path.join(dir, rel, "package.json"), "utf8"));
+            const script = pkg.scripts && (pkg.scripts.dev ? "dev" : pkg.scripts.start ? "start" : null);
+            if (script && pkg.name) procs.push({ name: path.basename(rel), command: `pnpm -F ${pkg.name} ${script}`, dir });
+          } catch {}
+        }
+      }
+      if (procs.length > 1) return procs;
+    }
+    for (const cf of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) if (has(cf)) {
+      const procs = [];
+      let inServices = false;
+      for (const line of read(cf).split("\n")) {
+        if (/^services:\s*$/.test(line)) { inServices = true; continue; }
+        if (inServices && /^[A-Za-z#]/.test(line)) inServices = false; // dedent = section over
+        const m = inServices && line.match(/^ {2}([A-Za-z0-9._-]+):\s*$/);
+        if (m) procs.push({ name: m[1], command: `docker compose up ${m[1]}`, dir });
+      }
+      if (procs.length > 1) return procs;
+    }
+  } catch {}
+  return null;
+}
+
 function scanProjects() {
   const out = [];
   const excluded = new Set((cfg.excludes || []).map(expand));
@@ -425,6 +480,7 @@ function scanProjects() {
     isGit,
     branch: gitBranchFast(dir),
     suggestedCommand: cmd,
+    procs: detectProcs(dir),
     configured: cfg.services.some((s) => svcDir(s) === dir || svcDir(s).startsWith(dir + path.sep)),
     category: catKeys.map((k) => pc[k]).find(Boolean) || "Uncategorized",
   });
@@ -535,15 +591,25 @@ function parseEnvFile(file) {
   return out;
 }
 
-function startService(s, branch) {
+async function startService(s, branch, force) {
   const dir = svcDir(s);
   if (procs[s.name] && procs[s.name].child.exitCode === null)
     return { code: 409, error: `${s.name} is already running (managed)` };
   if (adoptedPid(s.name))
     return { code: 409, error: `${s.name} is already running (from a previous daemon) — Kill it first` };
   bustPortCache(); // the busy check must not act on stale data
-  const busy = portPid(s.port);
-  if (busy) return { code: 409, error: `port ${s.port} is busy (pid ${busy}, external) — kill it first` };
+  let busy = portPid(s.port);
+  if (busy && force) { // user confirmed: evict the squatter, then take the port
+    try { process.kill(busy, "SIGTERM"); } catch {}
+    for (let i = 0; i < 15 && busy; i++) {
+      await new Promise((ok) => setTimeout(ok, 200));
+      bustPortCache();
+      busy = portPid(s.port);
+    }
+    if (busy) return { code: 409, error: `pid ${busy} did not release port ${s.port}` };
+    pushLog(s.name, `[stackdeck] killed external process squatting port ${s.port}\n`);
+  }
+  if (busy) return { code: 409, error: `port ${s.port} is busy (pid ${busy}, external) — kill it first`, busyPid: busy };
   if (!fs.existsSync(dir)) return { code: 400, error: `directory not found: ${dir}` };
 
   if (branch) {
@@ -585,20 +651,146 @@ function startService(s, branch) {
     delete procs[s.name];
     saveProcs();
   });
+  const rec = { child, startedAt: Date.now(), branch: branch || null, stopping: false };
   child.on("exit", (code, sig) => {
     pushLog(s.name, `[stackdeck] exited (code=${code} signal=${sig})\n`);
+    lastExit[s.name] = { code, sig, at: Date.now(), expected: rec.stopping };
     delete procs[s.name];
     saveProcs();
+    maybeAutoRestart(s, rec, code);
   });
-  procs[s.name] = { child, startedAt: Date.now(), branch: branch || null };
+  procs[s.name] = rec;
+  delete lastExit[s.name];
+  const rt = restarts[s.name];
+  if (rt) { clearTimeout(rt.timer); if (!rt.auto) restarts[s.name] = { n: 0 }; }
   saveProcs();
   pushLog(s.name, `[stackdeck] started: ${s.command} (pid ${child.pid})\n`);
   return { code: 200, ok: true, pid: child.pid };
 }
 
+/* restart: "on-failure" — exponential backoff, attempts reset after a minute
+   of clean uptime; manual stops never trigger it. */
+const lastExit = {};   // name -> { code, sig, at, expected }
+const restarts = {};   // name -> { n, timer, auto }
+function maybeAutoRestart(s, rec, code) {
+  if (s.restart !== "on-failure" || rec.stopping || code === 0) return;
+  const uptime = Date.now() - rec.startedAt;
+  const r = (restarts[s.name] = restarts[s.name] || { n: 0 });
+  if (uptime > 60000) r.n = 0;
+  if (r.n >= 5) {
+    pushLog(s.name, `[stackdeck] crashed ${r.n} times — giving up (edit the service to reset)\n`);
+    return;
+  }
+  const delay = Math.min(30000, 1000 * 2 ** r.n);
+  r.n += 1;
+  pushLog(s.name, `[stackdeck] crashed (code=${code}) — restarting in ${delay / 1000}s (attempt ${r.n}/5)\n`);
+  r.timer = setTimeout(async () => {
+    r.auto = true;
+    const cur = findSvc(s.name);
+    if (cur && !(procs[s.name] && procs[s.name].child.exitCode === null)) await startService(cur, rec.branch);
+    r.auto = false;
+  }, delay);
+  r.timer.unref();
+}
+
+/* Readiness: a service is "ready" when its readyWhen condition holds —
+   { "log": "<regex>" } (matched against live output), { "http": "<url>" }
+   (2xx/3xx), or, by default, its port accepting connections. */
+const readyWaiters = {}; // name -> [{ regex, resolve }]
+function notifyLogWaiters(name, lines) {
+  const ws = readyWaiters[name];
+  if (!ws || !ws.length) return;
+  for (const w of [...ws]) {
+    if (lines.some((l) => w.regex.test(l))) {
+      w.resolve(true);
+      ws.splice(ws.indexOf(w), 1);
+    }
+  }
+}
+async function waitReady(s, timeoutMs = 60000) {
+  const until = Date.now() + timeoutMs;
+  const rw = s.readyWhen || {};
+  if (rw.log) {
+    let regex;
+    try { regex = new RegExp(rw.log); } catch { return { ok: false, why: `bad readyWhen.log regex` }; }
+    return await new Promise((resolve) => {
+      const w = { regex, resolve: () => resolve({ ok: true }) };
+      (readyWaiters[s.name] = readyWaiters[s.name] || []).push(w);
+      setTimeout(() => {
+        const ws = readyWaiters[s.name] || [];
+        const i = ws.indexOf(w);
+        if (i >= 0) { ws.splice(i, 1); resolve({ ok: false, why: "log pattern not seen in time" }); }
+      }, timeoutMs).unref();
+    });
+  }
+  if (rw.http) {
+    while (Date.now() < until) {
+      const ok = await new Promise((resolve) => {
+        const req = http.get(rw.http, { timeout: 2000 }, (r) => { r.resume(); resolve(r.statusCode < 400); });
+        req.on("error", () => resolve(false));
+        req.on("timeout", () => { req.destroy(); resolve(false); });
+      });
+      if (ok) return { ok: true };
+      if (!(procs[s.name] && procs[s.name].child.exitCode === null)) return { ok: false, why: "process exited" };
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return { ok: false, why: "http check never passed" };
+  }
+  if (s.port) {
+    while (Date.now() < until) {
+      bustPortCache();
+      if (portPid(s.port)) return { ok: true };
+      if (!(procs[s.name] && procs[s.name].child.exitCode === null)) return { ok: false, why: "process exited" };
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return { ok: false, why: `port ${s.port} never opened` };
+  }
+  await new Promise((r) => setTimeout(r, 1000)); // no signal at all: brief grace
+  return { ok: true };
+}
+
+/* Dependency-ordered startup: topo-sort dependsOn, start each level, wait for
+   readiness before starting dependents. Cycles fail loudly. */
+async function startWithDeps(names, force) {
+  const results = {};
+  const visiting = new Set(), done = new Set();
+  const startOne = async (name, chain) => {
+    if (done.has(name)) return true;
+    if (visiting.has(name)) { results[name] = { error: `dependency cycle: ${[...chain, name].join(" → ")}` }; return false; }
+    visiting.add(name);
+    const s = findSvc(name);
+    if (!s) { results[name] = { error: "unknown service" }; visiting.delete(name); return false; }
+    for (const dep of s.dependsOn || []) {
+      if (!(await startOne(dep, [...chain, name]))) {
+        results[name] = results[name] || { error: `dependency '${dep}' failed` };
+        visiting.delete(name);
+        return false;
+      }
+    }
+    const alreadyUp = (procs[name] && procs[name].child.exitCode === null) || portPid(s.port) || adoptedPid(name);
+    if (!alreadyUp) {
+      const r = await startService(s, undefined, force);
+      if (r.error) { results[name] = { error: r.error }; visiting.delete(name); return false; }
+      const ready = await waitReady(s);
+      if (!ready.ok) { results[name] = { error: `started but not ready: ${ready.why}` }; visiting.delete(name); return false; }
+      results[name] = { ok: true, started: true };
+    } else {
+      results[name] = { ok: true, alreadyRunning: true };
+    }
+    visiting.delete(name);
+    done.add(name);
+    return true;
+  };
+  for (const n of names) await startOne(n, []);
+  return results;
+}
+
 function stopService(s) {
+  const rt = restarts[s.name];
+  if (rt) { clearTimeout(rt.timer); rt.n = 0; } // a manual stop cancels pending auto-restarts
   const p = procs[s.name];
   if (p && p.child.exitCode === null) {
+    p.stopping = true; // suppresses crash notification + on-failure restart
     const child = p.child, pid = child.pid;
     try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
     // Escalate only if OUR child is still alive — never fire a blind kill at a
@@ -710,6 +902,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       projectRoots: cfg.projectRoots,
       categoryOrder: cfg.categoryOrder || [],
       excludes: cfg.excludes || [],
+      proxyPort: PROXY_PORT,
     });
 
   if (req.method === "POST" && url.pathname === "/api/config") {
@@ -774,11 +967,27 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   }
 
   if (req.method === "POST" && url.pathname === "/api/start") {
-    const { name, branch } = await readBody(req);
+    const { name, branch, force } = await readBody(req);
     const s = findSvc(name);
     if (!s) return json(res, 404, { error: "unknown service" });
-    const r = startService(s, branch);
+    if (Array.isArray(s.dependsOn) && s.dependsOn.length) {
+      const dep = await startWithDeps(s.dependsOn, false);
+      const failed = Object.entries(dep).find(([, v]) => v.error);
+      if (failed) return json(res, 409, { error: `dependency '${failed[0]}': ${failed[1].error}` });
+    }
+    const r = await startService(s, branch, force === true);
     return json(res, r.code, r);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/start-all") {
+    // Dependency-ordered bulk start for one section (null group = Ungrouped).
+    const { group } = await readBody(req);
+    const names = cfg.services
+      .filter((s) => (s.group || null) === (group || null) && !s.hidden)
+      .map((s) => s.name);
+    if (!names.length) return json(res, 400, { error: "nothing to start" });
+    const results = await startWithDeps(names, false);
+    return json(res, 200, { results });
   }
 
   if (req.method === "POST" && url.pathname === "/api/stop") {
@@ -950,6 +1159,22 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       if (b.envFile === false || typeof b.envFile === "string") s.envFile = b.envFile;
       else delete s.envFile;
     }
+    if (b.restart !== undefined) {
+      if (b.restart === "on-failure") s.restart = "on-failure"; else delete s.restart;
+      const rt = restarts[s.name]; if (rt) { clearTimeout(rt.timer); rt.n = 0; } // editing resets give-up state
+    }
+    if (b.dependsOn !== undefined) {
+      const deps = Array.isArray(b.dependsOn) ? b.dependsOn.filter(validSvcName).filter((d) => d !== b.name) : [];
+      if (deps.length) s.dependsOn = deps; else delete s.dependsOn;
+    }
+    if (b.readyWhen !== undefined) {
+      const rw = b.readyWhen;
+      if (rw && typeof rw === "object" && (typeof rw.log === "string" || typeof rw.http === "string")) {
+        if (typeof rw.log === "string") { try { new RegExp(rw.log); } catch { return json(res, 400, { error: "readyWhen.log is not a valid regex" }); } }
+        s.readyWhen = { ...(typeof rw.log === "string" && rw.log ? { log: rw.log } : {}), ...(typeof rw.http === "string" && rw.http ? { http: rw.http } : {}) };
+        if (!Object.keys(s.readyWhen).length) delete s.readyWhen;
+      } else delete s.readyWhen;
+    }
     if (b.group !== undefined) {
       if (b.group && cfg.groups.includes(b.group)) s.group = b.group;
       else delete s.group;
@@ -1001,3 +1226,52 @@ server.on("error", (e) => {
 server.listen(PORT, "127.0.0.1", () =>
   console.log(`stackdeck v${VERSION} · http://localhost:${PORT} · config ${CONFIG_PATH}`)
 );
+
+/* ---------- *.localhost reverse proxy ----------
+   Browsers resolve *.localhost to loopback natively — no /etc/hosts, no PAC
+   file. <service>.localhost → 127.0.0.1:<service port>. Unauthenticated by
+   design (it only forwards to ports you configured); WebSockets pass through.
+   macOS allows unprivileged bind to 80; elsewhere we fall back to 8880. */
+const net = require("net");
+let PROXY_PORT = null;
+const proxyTargetPort = (hostHeader) => {
+  const m = /^([A-Za-z0-9._-]+)\.localhost(?::\d+)?$/.exec(hostHeader || "");
+  if (!m) return null;
+  const s = findSvc(m[1]);
+  return s && s.port ? s.port : null;
+};
+const proxy = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
+  const port = proxyTargetPort(req.headers.host);
+  if (!port) { res.writeHead(404, { "Content-Type": "text/plain" }); return res.end("stackdeck: no service with that name (or it has no port)\n"); }
+  const up = http.request({ host: "127.0.0.1", port, path: req.url, method: req.method, headers: req.headers }, (upRes) => {
+    res.writeHead(upRes.statusCode, upRes.headers);
+    upRes.pipe(res);
+  });
+  up.on("error", (e) => { try { res.writeHead(502, { "Content-Type": "text/plain" }); res.end(`stackdeck proxy: ${e.message}\n`); } catch {} });
+  req.pipe(up);
+});
+proxy.on("upgrade", (req, socket, head) => {
+  const port = proxyTargetPort(req.headers.host);
+  if (!port) return socket.destroy();
+  const up = net.connect(port, "127.0.0.1", () => {
+    let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) raw += `${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`;
+    up.write(raw + "\r\n");
+    if (head && head.length) up.write(head);
+    socket.pipe(up).pipe(socket);
+  });
+  up.on("error", () => socket.destroy());
+  socket.on("error", () => up.destroy());
+});
+(function listenProxy(ports) {
+  if (!ports.length) { console.error("proxy: no port available — *.localhost domains disabled"); return; }
+  const p = ports[0];
+  proxy.once("error", (e) => {
+    if (e.code === "EADDRINUSE" || e.code === "EACCES") listenProxy(ports.slice(1));
+    else console.error(`proxy error: ${e.message}`);
+  });
+  proxy.listen(p, "127.0.0.1", () => {
+    PROXY_PORT = p;
+    console.log(`*.localhost proxy on :${p}`);
+  });
+})([80, 8880]);

@@ -44,8 +44,27 @@ npm link                     # then: stackdeck | stackdeck status | stackdeck lo
 - **Organize the board** — drag rows between your own sections, per-section
   *start all* / *stop all*, collapse/expand, hide/unhide anything, categorize
   the project list.
+- **Stacks that start in order** — give a service `dependsOn` and it starts
+  after its dependencies are *ready* (a log-line regex via `readyWhen`, an
+  HTTP check, or its port opening). Section **start all** is
+  dependency-ordered; cycles fail loudly.
+- **Crash handling** — `restart: on-failure` restarts with exponential
+  backoff (5 tries, resets after a minute of clean uptime); unexpected exits
+  show a `crashed` badge and fire a browser notification. Manual stops never
+  auto-restart.
+- **Port squatter eviction** — if another process holds a service's port,
+  Start tells you the pid and offers to kill it and take the port.
+- ***.localhost domains** — a built-in reverse proxy maps
+  `<service>.localhost` → its port (WebSockets included). Browsers resolve
+  `*.localhost` natively: no /etc/hosts, no PAC files. Port 80 where the OS
+  allows unprivileged bind (macOS), `:8880` otherwise.
+- **Multi-process repos** — a Procfile, docker-compose services, or pnpm
+  workspace packages turn one repo into a section of services with one click.
 - **CLI parity** — `stackdeck status|start|stop|restart|logs <name>` talks to
   the same daemon.
+- **MCP server** — `stackdeck mcp` exposes list/start/stop/restart/logs as
+  MCP tools over stdio, so AI coding agents can manage (and debug against)
+  your dev environment. Zero-dependency, wraps the same authenticated API.
 - **Dev tools** — detects databases and brokers installed on your machine
   (PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey, Elasticsearch/OpenSearch,
   RabbitMQ, NATS, MinIO, Temporal, ClickHouse, Mailpit, Memcached) and
@@ -72,9 +91,12 @@ editable from the UI; the interesting ones:
       "name": "api",
       "dir": "~/Projects/my-app",
       "command": "pnpm run dev",
-      "port": 3001,                            // for status detection
+      "port": 3001,                            // for status detection + <name>.localhost
       "env": { "DEBUG": "1" },
-      "group": "Stack A"
+      "group": "Stack A",
+      "dependsOn": ["db"],                     // started (and ready) first
+      "readyWhen": { "log": "Listening on" },  // or { "http": "http://…/health" }; default: port opens
+      "restart": "on-failure"                  // exponential backoff, 5 tries
     }
   ]
 }
@@ -97,6 +119,10 @@ service/section names, ports, dirs, and env server-side, limits request bodies
 to 1MB, and restricts the folder browser to your home directory and configured
 roots. Config writes are atomic; a corrupt config is set aside, never fatal.
 Logs rotate at 5MB per service. Do not port-forward the daemon off your machine.
+
+The `*.localhost` proxy is unauthenticated by design (your browser needs it),
+but it only forwards to the loopback ports of services you configured —
+nothing else is reachable through it.
 
 Stackdeck is **Unix-only** (macOS/Linux): it relies on bash, process groups,
 and lsof/ss. The `.env` loader is intentionally minimal — flat `KEY=value`

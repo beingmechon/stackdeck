@@ -81,6 +81,10 @@
   .badge.git   { color:var(--dim); background:oklch(0.30 0.012 75 / .5); font-family:var(--mono); font-weight:500; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
   .badge.plain { color:var(--faint); background:oklch(0.30 0.012 75 / .35); }
   .badge.cfgd  { color:var(--green); background:var(--green-dim); }
+  .badge.crash { color:var(--red); background:var(--red-dim); }
+  a.badge.link { color:var(--accent); background:var(--accent-dim); text-decoration:none; }
+  a.badge.link:hover { text-decoration:underline; }
+  .logfilter { width:200px; margin:0 0 6px; font-size:11.5px; padding:3px 8px; }
 
   select, input, textarea {
     background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:7px;
@@ -320,11 +324,16 @@ async function hideItem(type, name, hidden) {
 }
 
 async function startAll(group) {
-  const targets = services.filter(s => (s.group || null) === group && !s.running && !s.hidden);
-  if (!targets.length) return toast("nothing to start");
-  const r = await Promise.allSettled(targets.map(s => api("/api/start", { name: s.name })));
-  const ok = r.filter(x => x.status === "fulfilled").length;
-  toast(`started ${ok}/${targets.length}${ok < targets.length ? " — see logs" : ""}`, ok < targets.length);
+  toast("starting section (dependency order)…");
+  try {
+    const { results } = await api("/api/start-all", { group });
+    const started = Object.values(results).filter(v => v.started).length;
+    const failed = Object.entries(results).filter(([, v]) => v.error);
+    toast(failed.length
+      ? `started ${started}; failed: ${failed.map(([n, v]) => `${n} (${v.error})`).join("; ")}`
+      : `started ${started}${Object.values(results).some(v => v.alreadyRunning) ? " (rest already up)" : ""}`,
+      failed.length > 0);
+  } catch (e) { toast(e.message, true); }
   loadServices(true);
 }
 async function stopAll(group) {
@@ -382,6 +391,12 @@ function svcRow(s) {
       <span class="dot ${s.running ? "up" : ""}"></span>
       <span class="svc-name">${esc(s.name)}</span>
       ${s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
+      ${s.restartPending ? '<span class="badge dirty" title="crashed; auto-restart scheduled">restarting…</span>' : ""}
+      ${!s.running && !s.restartPending && s.lastExit && !s.lastExit.expected && s.lastExit.code !== 0
+        ? `<span class="badge crash" title="exited with code ${s.lastExit.code}">crashed</span>` : ""}
+      ${meta && meta.proxyPort && s.port
+        ? `<a class="badge link" target="_blank" href="http://${esc(s.name)}.localhost${meta.proxyPort === 80 ? "" : ":" + meta.proxyPort}"
+             title="via the *.localhost proxy">${esc(s.name)}.localhost</a>` : ""}
       <span class="addr">:${s.port ?? "—"}${s.pid ? " · " + s.pid : ""}</span>
       <span class="grow cmdline" title="${esc(s.dir)}">${esc(shortDir(s.dir))} · <b>${esc(s.command)}</b></span>
       ${branch}
@@ -404,6 +419,13 @@ function svcRow(s) {
         <label>command</label><textarea id="cmd-${s.name}">${esc(s.command)}</textarea>
         <label>port</label><input id="port-${s.name}" value="${s.port ?? ""}" placeholder="for status detection">
         <label>env</label><textarea id="env-${s.name}" placeholder='{"KEY":"value"} — .env in dir loads automatically; these override it'>${esc(JSON.stringify(s.env || {}))}</textarea>
+        <label>restart</label>
+        <select id="rs-${s.name}" style="max-width:160px">
+          <option value="">never (default)</option>
+          <option value="on-failure" ${s.restart === "on-failure" ? "selected" : ""}>on failure (backoff, 5 tries)</option>
+        </select>
+        <label>depends on</label><input id="dep-${s.name}" value="${esc((s.dependsOn || []).join(", "))}" placeholder="comma-separated service names, started first">
+        <label>ready when</label><input id="rw-${s.name}" value="${esc((s.readyWhen && s.readyWhen.log) || "")}" placeholder="regex matched against its logs (default: port opens)">
         <label></label>
         <div style="display:flex; gap:8px">
           <button onclick="saveSvc('${s.name}')">Save</button>
@@ -412,6 +434,7 @@ function svcRow(s) {
       </div>
     </div>
     <div class="drawer ${logOpen.has(s.name) ? "open" : ""}" id="logwrap-${s.name}">
+      <input class="logfilter" id="lf-${s.name}" type="search" placeholder="filter logs…" oninput="filterLogs('${s.name}')">
       <div class="logs" id="log-${s.name}"></div>
     </div>
   </div>`;
@@ -541,7 +564,9 @@ function projRow(p) {
   const branch = p.isGit
     ? `<span class="badge git" title="current branch">${esc(p.branch || "?")}</span>`
     : '<span class="badge plain">no git</span>';
-  const cmd = p.suggestedCommand
+  const cmd = p.procs && p.procs.length
+    ? `<span class="grow cmdline"><b>${p.procs.length} processes</b> · ${esc(p.procs.map(x => x.name).join(", ")).slice(0, 80)}</span>`
+    : p.suggestedCommand
     ? `<span class="grow cmdline"><b>${esc(p.suggestedCommand)}</b></span>`
     : '<span class="grow cmdline">no run command detected</span>';
   return `
@@ -653,9 +678,26 @@ function renderProjects() {
 async function configure(name) {
   const p = projects.find(x => x.name === name);
   if (!p) return;
-  let svcName = name.split("/").pop().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
-  if (services.some(s => s.name === svcName)) svcName += "-2";
+  const base = name.split("/").pop().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   try {
+    // Multi-process repo (Procfile / compose services / pnpm workspace):
+    // one service per process, grouped into a section named after the repo.
+    if (p.procs && p.procs.length) {
+      const section = name.split("/").pop().slice(0, 64);
+      await api("/api/group", { name: section }).catch(() => {}); // may already exist
+      let created = 0;
+      for (const proc of p.procs) {
+        const svcName = `${base}-${proc.name}`.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 64);
+        if (services.some(s => s.name === svcName)) continue;
+        await api("/api/service", { name: svcName, dir: proc.dir, command: proc.command, group: section });
+        created++;
+      }
+      toast(`created ${created} services in section '${section}'`);
+      await load();
+      return;
+    }
+    let svcName = base;
+    if (services.some(s => s.name === svcName)) svcName += "-2";
     await api("/api/service", { name: svcName, dir: p.dir, command: p.suggestedCommand || "echo set a command" });
     toast(`${svcName} added to Services${p.suggestedCommand ? "" : " — set its command"}`);
     open.add(svcName);
@@ -666,14 +708,19 @@ async function configure(name) {
 
 /* ---------- actions ---------- */
 
-async function start(name) {
+async function start(name, force) {
   const sel = document.getElementById("br-" + name);
   try {
-    await api("/api/start", { name, branch: sel && !sel.disabled ? sel.value : undefined });
+    await api("/api/start", { name, branch: sel && !sel.disabled ? sel.value : undefined, force: !!force });
     toast(name + " started");
     logOpen.add(name);
-  } catch (e) { toast(e.message, true); }
-  loadServices();
+  } catch (e) {
+    const busy = e.message.match(/port (\d+) is busy \(pid (\d+)/);
+    if (busy && !force && confirm(`Port ${busy[1]} is used by another process (pid ${busy[2]}).\nKill it and start ${name}?`))
+      return start(name, true);
+    toast(e.message, true);
+  }
+  loadServices(true);
 }
 async function stop(name) {
   try { await api("/api/stop", { name }); toast(name + " killed"); }
@@ -717,14 +764,33 @@ function ansiToHtml(raw) {
   return out + (openSpan ? "</span>" : "");
 }
 
+const clientLogs = {}; // name -> [raw lines], powers the per-pane filter
+function logMatches(name, line) {
+  const q = (document.getElementById("lf-" + name)?.value || "").toLowerCase();
+  return !q || line.toLowerCase().includes(q);
+}
+function filterLogs(name) {
+  const pane = document.getElementById("log-" + name);
+  if (!pane) return;
+  pane.innerHTML = (clientLogs[name] || [])
+    .filter(l => logMatches(name, l))
+    .map(l => ansiToHtml(l) + "\n").join("");
+  pane.scrollTop = pane.scrollHeight;
+}
 function attachStream(name) {
   streams[name]?.close();
   const pane = document.getElementById("log-" + name);
   if (!pane) return;
   pane.innerHTML = "";
+  clientLogs[name] = [];
   const es = new EventSource("/api/logs?name=" + encodeURIComponent(name) + "&t=" + TOKEN);
   es.onmessage = (ev) => {
-    pane.insertAdjacentHTML("beforeend", ansiToHtml(JSON.parse(ev.data)) + "\n");
+    const line = JSON.parse(ev.data);
+    const buf = clientLogs[name];
+    buf.push(line);
+    if (buf.length > 3000) buf.shift();
+    if (!logMatches(name, line)) return;
+    pane.insertAdjacentHTML("beforeend", ansiToHtml(line) + "\n");
     while (pane.childNodes.length > 6000) pane.removeChild(pane.firstChild);
     pane.scrollTop = pane.scrollHeight;
   };
@@ -743,18 +809,25 @@ async function saveSvc(name) {
       finalName = wanted;
     }
     const cur = services.find(x => x.name === name) || {};
+    const rw = document.getElementById("rw-" + name).value.trim();
     const body = {
       name: finalName,
       dir: document.getElementById("dir-" + name).value.trim(),
       command: document.getElementById("cmd-" + name).value.trim(),
       port: document.getElementById("port-" + name).value.trim() || undefined,
       env,
+      restart: document.getElementById("rs-" + name).value || null,
+      dependsOn: document.getElementById("dep-" + name).value.split(",").map(x => x.trim()).filter(Boolean),
+      readyWhen: rw ? { log: rw } : null,
     };
     // Rename works mid-run; the other fields need a stopped service. Skip the
     // field save when nothing but the name changed, so renaming while running
     // doesn't half-fail.
     const fieldsChanged = body.dir !== cur.dir || body.command !== cur.command ||
-      String(body.port ?? "") !== String(cur.port ?? "") || JSON.stringify(env) !== JSON.stringify(cur.env || {});
+      String(body.port ?? "") !== String(cur.port ?? "") || JSON.stringify(env) !== JSON.stringify(cur.env || {}) ||
+      (body.restart || "") !== (cur.restart || "") ||
+      JSON.stringify(body.dependsOn) !== JSON.stringify(cur.dependsOn || []) ||
+      rw !== ((cur.readyWhen && cur.readyWhen.log) || "");
     if (fieldsChanged) await api("/api/service", body);
     toast(finalName + " saved"); open.delete(name); load();
   } catch (e) { toast(e.message, true); }
@@ -773,12 +846,25 @@ function editGuard() {
   return ae && (ae.closest("#services") || ae.closest("#projects") || ae.id === "filter") &&
          ["SELECT","INPUT","TEXTAREA"].includes(ae.tagName);
 }
+let prevUp = null; // name -> was running (crash detection across polls)
+function notifyCrash(name, code) {
+  toast(`${name} crashed (exit ${code})`, true);
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") Notification.requestPermission();
+  if (Notification.permission === "granted")
+    new Notification("Stackdeck", { body: `${name} crashed (exit code ${code})` });
+}
 async function loadServices(force) {
   if (!force && editGuard()) return;
   try {
     const d = await api("/api/services");
     groups = d.groups || []; services = d.services || [];
     hiddenGroups = d.hiddenGroups || []; hiddenCategories = d.hiddenCategories || [];
+    if (prevUp) for (const s of services) {
+      if (prevUp.get(s.name) && !s.running && s.lastExit && !s.lastExit.expected && s.lastExit.code !== 0)
+        notifyCrash(s.name, s.lastExit.code);
+    }
+    prevUp = new Map(services.map(s => [s.name, s.running]));
     renderServices();
   }
   catch (e) { toast("Stackdeck server unreachable: " + e.message, true); }

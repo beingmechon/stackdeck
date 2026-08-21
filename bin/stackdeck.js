@@ -9,6 +9,7 @@
  *   stackdeck stop <name>    stop a service
  *   stackdeck restart <name> restart a service
  *   stackdeck logs <name>    stream a service's logs (Ctrl-C to quit)
+ *   stackdeck mcp            run an MCP server over stdio (for AI agents)
  */
 "use strict";
 const path = require("path");
@@ -117,6 +118,89 @@ function openBrowser(url) {
     }
     return;
   }
+  if (cmd === "mcp") {
+    await ensureDaemon();
+    runMcp();
+    return;
+  }
   console.error("unknown command:", cmd);
   process.exit(1);
 })();
+
+/* ---------- MCP server (stdio, zero-dep) ----------
+   Exposes the daemon to AI agents: list services, start/stop/restart, read
+   logs. Newline-delimited JSON-RPC 2.0, MCP protocol 2025-03-26. */
+function runMcp() {
+  const TOOLS = [
+    { name: "list_services", description: "List all Stackdeck services with running state, port, pid, git branch, and dirty flag.",
+      inputSchema: { type: "object", properties: {} } },
+    { name: "start_service", description: "Start a service by name (starts its dependencies first). Optional branch to check out.",
+      inputSchema: { type: "object", properties: { name: { type: "string" }, branch: { type: "string" } }, required: ["name"] } },
+    { name: "stop_service", description: "Stop (kill) a service by name.",
+      inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+    { name: "restart_service", description: "Restart a service by name.",
+      inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+    { name: "get_logs", description: "Return the most recent log lines for a service (from its on-disk log).",
+      inputSchema: { type: "object", properties: { name: { type: "string" }, lines: { type: "number", description: "default 100" } }, required: ["name"] } },
+  ];
+  async function callTool(name, args) {
+    if (name === "list_services") {
+      const r = await fetch(`${BASE}/api/services`, { headers: authHeaders() });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d.services.map((s) => ({
+        name: s.name, running: s.running, managed: s.managed, pid: s.pid, port: s.port ?? null,
+        branch: s.branch, dirty: s.dirty, group: s.group ?? null, command: s.command, dir: s.dir,
+      }));
+    }
+    if (["start_service", "stop_service", "restart_service"].includes(name)) {
+      const ep = { start_service: "start", stop_service: "stop", restart_service: "restart" }[name];
+      const r = await fetch(`${BASE}/api/${ep}`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ name: args.name, branch: args.branch }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d;
+    }
+    if (name === "get_logs") {
+      const n = Math.min(Math.max(Number(args.lines) || 100, 1), 2000);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(args.name)) throw new Error("bad service name");
+      const file = path.join(stateHome(), "logs", `${args.name}.log`);
+      let text = "";
+      try { text = fs.readFileSync(file, "utf8"); } catch { throw new Error(`no logs for '${args.name}'`); }
+      return text.split("\n").slice(-n).join("\n");
+    }
+    throw new Error(`unknown tool: ${name}`);
+  }
+  let pending = 0, stdinDone = false;
+  const maybeExit = () => { if (stdinDone && pending === 0) process.exit(0); };
+  const reply = (id, result, error) => {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, ...(error ? { error: { code: -32000, message: error } } : { result }) }) + "\n");
+  };
+  let buf = "";
+  process.stdin.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    const linesIn = buf.split("\n");
+    buf = linesIn.pop();
+    for (const line of linesIn) {
+      if (!line.trim()) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch { continue; }
+      if (msg.method === "initialize")
+        reply(msg.id, { protocolVersion: "2025-03-26", capabilities: { tools: {} },
+          serverInfo: { name: "stackdeck", version: "0.1.0" } });
+      else if (msg.method === "tools/list") reply(msg.id, { tools: TOOLS });
+      else if (msg.method === "tools/call") {
+        pending++; // dispatched concurrently: a slow call must not delay (or exit before) queued ones
+        callTool(msg.params.name, msg.params.arguments || {})
+          .then((out) => reply(msg.id, { content: [{ type: "text", text: typeof out === "string" ? out : JSON.stringify(out, null, 2) }] }))
+          .catch((e) => reply(msg.id, { content: [{ type: "text", text: `error: ${e.message}` }], isError: true }))
+          .finally(() => { pending--; maybeExit(); });
+      }
+      else if (msg.id !== undefined) reply(msg.id, {}); // politely ack anything else with an id
+    }
+  });
+  // Exit when the host closes the pipe — but only after in-flight calls finish.
+  process.stdin.on("end", () => { stdinDone = true; setImmediate(maybeExit); });
+}
