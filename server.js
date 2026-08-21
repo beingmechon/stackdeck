@@ -599,6 +599,19 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     return json(res, 200, { ok: true });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/group/rename") {
+    const { name, newName } = await readBody(req);
+    const n = (newName || "").trim();
+    if (!cfg.groups.includes(name)) return json(res, 404, { error: "unknown section" });
+    if (!validLabel(n)) return json(res, 400, { error: "section name: 1–64 chars, no quotes/slashes/angle brackets" });
+    if (n !== name && cfg.groups.includes(n)) return json(res, 409, { error: "a section with that name already exists" });
+    cfg.groups = cfg.groups.map((g) => (g === name ? n : g));
+    for (const s of cfg.services) if (s.group === name) s.group = n;
+    cfg.hiddenGroups = (cfg.hiddenGroups || []).map((g) => (g === name ? n : g));
+    saveCfg();
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/group/delete") {
     const { name } = await readBody(req);
     if (!cfg.groups.includes(name)) return json(res, 404, { error: "unknown section" });

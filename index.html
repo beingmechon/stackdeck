@@ -394,6 +394,7 @@ function renderServices() {
       <button class="ghost" onclick="stopAll(${gArg})" title="stop every running service here">stop all</button>`;
     const head = g !== null
       ? `<div class="group-head">${chevTitle(key, esc(g), `${running}/${rows.length} up`)}${bulk}
+           <button class="ghost" onclick="renameSection(${gArg})">rename</button>
            <button class="ghost" onclick="hideItem('group',${gArg},${!gHidden})">${gHidden ? "unhide" : "hide"}</button>
            <button class="ghost" title="delete section (services move to Ungrouped)" onclick="delSection(${gArg})">×</button></span></div>`
       : (groups.length ? `<div class="group-head">${chevTitle(key, "Ungrouped", `${running}/${rows.length} up`)}${bulk}</span></div>` : "");
@@ -470,6 +471,15 @@ async function addSection() {
   if (!name || !name.trim()) return;
   try { await api("/api/group", { name: name.trim() }); loadServices(true); }
   catch (e) { toast(e.message, true); }
+}
+async function renameSection(name) {
+  const newName = prompt(`Rename section '${name}' to:`, name);
+  if (!newName || !newName.trim() || newName.trim() === name) return;
+  try {
+    await api("/api/group/rename", { name, newName: newName.trim() });
+    if (collapsed.has("g:" + name)) { collapsed.delete("g:" + name); collapsed.add("g:" + newName.trim()); saveCollapsed(); }
+    loadServices(true);
+  } catch (e) { toast(e.message, true); }
 }
 async function delSection(name) {
   if (!confirm(`Delete section '${name}'? Its services move to Ungrouped.`)) return;
