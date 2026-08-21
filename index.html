@@ -284,7 +284,7 @@ const TOKEN = "__STACKDECK_TOKEN__"; // injected by the daemon when serving this
 const $svc = document.getElementById("services");
 const $proj = document.getElementById("projects");
 const $toast = document.getElementById("toast");
-const open = new Set(), logOpen = new Set(), streams = {};
+const open = new Set(), logOpen = new Set(), streams = Object.create(null);
 let services = [], projects = [], groups = [], instancesList = [];
 let hiddenGroups = [], hiddenCategories = [], showHidden = false;
 
@@ -734,6 +734,9 @@ function instanceRow(i) {
 async function worktreeStart(name) {
   const sel = document.getElementById("br-" + name);
   if (!sel) return;
+  const s = services.find(x => x.name === name);
+  if (s && sel.value === s.branch)
+    return toast(`'${sel.value}' is checked out in the main copy — pick a different branch for a worktree`, true);
   try {
     const r = await api("/api/worktree/start", { name, branch: sel.value });
     toast(`${r.key} running${r.port ? ` with PORT=${r.port}` : ""}`);
@@ -806,7 +809,7 @@ function ansiToHtml(raw) {
   return out + (openSpan ? "</span>" : "");
 }
 
-const clientLogs = {}; // name -> [raw lines], powers the per-pane filter
+const clientLogs = Object.create(null); // name -> [raw lines], powers the per-pane filter
 function logMatches(name, line) {
   const q = (document.getElementById("lf-" + name)?.value || "").toLowerCase();
   return !q || line.toLowerCase().includes(q);

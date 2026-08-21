@@ -189,7 +189,7 @@ function runMcp() {
       try { msg = JSON.parse(line); } catch { continue; }
       if (msg.method === "initialize")
         reply(msg.id, { protocolVersion: "2025-03-26", capabilities: { tools: {} },
-          serverInfo: { name: "stackdeck", version: "0.1.0" } });
+          serverInfo: { name: "stackdeck", version: "0.3.0" } });
       else if (msg.method === "tools/list") reply(msg.id, { tools: TOOLS });
       else if (msg.method === "tools/call") {
         pending++; // dispatched concurrently: a slow call must not delay (or exit before) queued ones

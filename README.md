@@ -127,7 +127,11 @@ Logs rotate at 5MB per service. Do not port-forward the daemon off your machine.
 
 The `*.localhost` proxy is unauthenticated by design (your browser needs it),
 but it only forwards to the loopback ports of services you configured —
-nothing else is reachable through it.
+nothing else is reachable through it. Note that it makes those services
+reachable at *guessable names* from any site you visit (same-origin policy
+still blocks reading responses); that's roughly the exposure a guessable
+port already had, but if a dev service has destructive unauthenticated
+endpoints, don't give it a port in Stackdeck.
 
 Stackdeck is **Unix-only** (macOS/Linux): it relies on bash, process groups,
 and lsof/ss. The `.env` loader is intentionally minimal — flat `KEY=value`

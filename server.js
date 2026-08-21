@@ -13,13 +13,16 @@
  *   logs/         one log file per service + the daemon's own log
  */
 "use strict";
+// Last-resort guards: a bug on one request path must never kill the board.
+process.on("uncaughtException", (e) => console.error("uncaught exception:", e));
+process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e));
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { spawn, execFileSync } = require("child_process");
 
-const VERSION = "0.1.0";
+const VERSION = "0.3.0";
 const ROOT = __dirname;
 
 /* ---------- state directory & config ---------- */
@@ -192,9 +195,10 @@ function portPid(port) {
 }
 
 const MAX_BUF = 2000;
-const procs = {};   // name -> { child, startedAt, branch }
-const buffers = {}; // name -> [lines]
-const clients = {}; // name -> Set<res> (SSE)
+const nul = () => Object.create(null); // user input indexes these: no prototype keys
+const procs = nul();   // name -> { child, startedAt, branch, stopping }
+const buffers = nul(); // name -> [lines]
+const clients = nul(); // name -> Set<res> (SSE)
 
 /* Pids persist to disk so a restarted daemon re-adopts services it started
    (children are detached on purpose: killing the daemon must not kill your
@@ -202,18 +206,26 @@ const clients = {}; // name -> Set<res> (SSE)
    can be killed — same as any external process, minus the guesswork. */
 const PROCS_PATH = path.join(HOME_DIR, "procs.json");
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-let adopted = {};
+const instances = nul(); // "svc@branch" -> { svc, branch, dir, port, startedAt, child? OR pid (adopted) }
+const instLive = (i) => (i.child ? i.child.exitCode === null : alive(i.pid));
+const instPid = (i) => (i.child ? i.child.pid : i.pid);
+const adopted = nul();
 try {
   const saved = JSON.parse(fs.readFileSync(PROCS_PATH, "utf8"));
-  for (const [n, v] of Object.entries(saved))
+  const svc = saved.services || saved; // pre-0.3 format was a flat map of services
+  for (const [n, v] of Object.entries(svc || {}))
     if (v && Number.isInteger(v.pid) && alive(v.pid)) adopted[n] = v;
+  for (const [k, v] of Object.entries(saved.instances || {}))
+    if (v && Number.isInteger(v.pid) && alive(v.pid)) instances[k] = v; // adopted instance: pid, no child
 } catch {}
 function saveProcs() {
-  const live = {};
+  const out = { services: {}, instances: {} };
   for (const [n, p] of Object.entries(procs))
-    if (p.child.exitCode === null && p.child.pid) live[n] = { pid: p.child.pid, startedAt: p.startedAt, branch: p.branch };
-  for (const [n, v] of Object.entries(adopted)) if (!(n in live) && alive(v.pid)) live[n] = v;
-  try { fs.writeFileSync(PROCS_PATH, JSON.stringify(live, null, 2) + "\n", { mode: 0o600 }); } catch {}
+    if (p.child.exitCode === null && p.child.pid) out.services[n] = { pid: p.child.pid, startedAt: p.startedAt, branch: p.branch };
+  for (const [n, v] of Object.entries(adopted)) if (!(n in out.services) && alive(v.pid)) out.services[n] = v;
+  for (const [k, i] of Object.entries(instances))
+    if (instLive(i)) out.instances[k] = { pid: instPid(i), svc: i.svc, branch: i.branch, dir: i.dir, port: i.port, startedAt: i.startedAt };
+  try { fs.writeFileSync(PROCS_PATH, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 }); } catch {}
 }
 function adoptedPid(name) {
   const a = adopted[name];
@@ -225,8 +237,8 @@ function adoptedPid(name) {
 
 // Disk logs: one append stream per service, rotated at 5MB (one .1 backup) so
 // a chatty service can't eat the disk.
-const logStreams = {};
-const logWrites = {};
+const logStreams = nul();
+const logWrites = nul();
 const MAX_LOG_BYTES = 5 * 1024 * 1024;
 function logStream(name) {
   if (!logStreams[name]) {
@@ -563,7 +575,7 @@ const INFRA = () => [
   { name: "mailpit", title: "Mailpit", bin: "mailpit", port: 8025, command: "mailpit" },
 ];
 
-const WHICH_CACHE = {};
+const WHICH_CACHE = nul();
 function which(bin) {
   if (bin in WHICH_CACHE) return WHICH_CACHE[bin];
   try {
@@ -594,9 +606,9 @@ function parseEnvFile(file) {
 async function startService(s, branch, force) {
   const dir = svcDir(s);
   if (procs[s.name] && procs[s.name].child.exitCode === null)
-    return { code: 409, error: `${s.name} is already running (managed)` };
+    return { code: 409, error: `${s.name} is already running (managed)`, already: true };
   if (adoptedPid(s.name))
-    return { code: 409, error: `${s.name} is already running (from a previous daemon) — Kill it first` };
+    return { code: 409, error: `${s.name} is already running (from a previous daemon) — Kill it first`, already: true };
   bustPortCache(); // the busy check must not act on stale data
   let busy = portPid(s.port);
   if (busy && force) { // user confirmed: evict the squatter, then take the port
@@ -670,8 +682,8 @@ async function startService(s, branch, force) {
 
 /* restart: "on-failure" — exponential backoff, attempts reset after a minute
    of clean uptime; manual stops never trigger it. */
-const lastExit = {};   // name -> { code, sig, at, expected }
-const restarts = {};   // name -> { n, timer, auto }
+const lastExit = nul();   // name -> { code, sig, at, expected }
+const restarts = nul();   // name -> { n, timer, auto }
 function maybeAutoRestart(s, rec, code) {
   if (s.restart !== "on-failure" || rec.stopping || code === 0) return;
   const uptime = Date.now() - rec.startedAt;
@@ -696,7 +708,7 @@ function maybeAutoRestart(s, rec, code) {
 /* Readiness: a service is "ready" when its readyWhen condition holds —
    { "log": "<regex>" } (matched against live output), { "http": "<url>" }
    (2xx/3xx), or, by default, its port accepting connections. */
-const readyWaiters = {}; // name -> [{ regex, resolve }]
+const readyWaiters = nul(); // name -> [{ regex, resolve }]
 function notifyLogWaiters(name, lines) {
   const ws = readyWaiters[name];
   if (!ws || !ws.length) return;
@@ -713,6 +725,7 @@ async function waitReady(s, timeoutMs = 60000) {
   if (rw.log) {
     let regex;
     try { regex = new RegExp(rw.log); } catch { return { ok: false, why: `bad readyWhen.log regex` }; }
+    if ((buffers[s.name] || []).slice(-200).some((l) => regex.test(l))) return { ok: true };
     return await new Promise((resolve) => {
       const w = { regex, resolve: () => resolve({ ok: true }) };
       (readyWaiters[s.name] = readyWaiters[s.name] || []).push(w);
@@ -726,9 +739,12 @@ async function waitReady(s, timeoutMs = 60000) {
   if (rw.http) {
     while (Date.now() < until) {
       const ok = await new Promise((resolve) => {
-        const req = http.get(rw.http, { timeout: 2000 }, (r) => { r.resume(); resolve(r.statusCode < 400); });
-        req.on("error", () => resolve(false));
-        req.on("timeout", () => { req.destroy(); resolve(false); });
+        try {
+          const mod = rw.http.startsWith("https:") ? require("https") : http;
+          const req = mod.get(rw.http, { timeout: 2000 }, (r) => { r.resume(); resolve(r.statusCode < 400); });
+          req.on("error", () => resolve(false));
+          req.on("timeout", () => { req.destroy(); resolve(false); });
+        } catch { resolve(false); }
       });
       if (ok) return { ok: true };
       if (!(procs[s.name] && procs[s.name].child.exitCode === null)) return { ok: false, why: "process exited" };
@@ -770,7 +786,7 @@ async function startWithDeps(names, force) {
     const alreadyUp = (procs[name] && procs[name].child.exitCode === null) || portPid(s.port) || adoptedPid(name);
     if (!alreadyUp) {
       const r = await startService(s, undefined, force);
-      if (r.error) { results[name] = { error: r.error }; visiting.delete(name); return false; }
+      if (r.error && !r.already) { results[name] = { error: r.error }; visiting.delete(name); return false; }
       const ready = await waitReady(s);
       if (!ready.ok) { results[name] = { error: `started but not ready: ${ready.why}` }; visiting.delete(name); return false; }
       results[name] = { ok: true, started: true };
@@ -837,10 +853,11 @@ async function restartService(s) {
    Run ANOTHER branch of a service in parallel: a git worktree gives it its
    own checkout, a free port is injected as $PORT. Instances are ephemeral
    (they do not survive daemon restarts) and live under the data dir. */
-const instances = {}; // "svc@branch" -> { svc, branch, dir, port, child, startedAt }
 function freePortFrom(base) {
   bustPortCache();
-  const taken = listeningMap();
+  const taken = new Set(listeningMap().keys());
+  for (const i of Object.values(instances)) if (instLive(i) && i.port) taken.add(i.port); // not yet bound ≠ free
+  for (const s of cfg.services) if (s.port) taken.add(Number(s.port));
   for (let p = base; p < base + 200; p++) if (!taken.has(p)) return p;
   return null;
 }
@@ -851,17 +868,29 @@ function startWorktree(s, branch) {
   if (!g.branches.includes(branch)) return { code: 400, error: `unknown branch '${branch}'` };
   const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, "-");
   const key = `${s.name}@${safeBranch}`; // also the log-file name — must stay path-safe
-  if (instances[key] && instances[key].child.exitCode === null)
-    return { code: 409, error: `${key} is already running` };
+  if (instances[key] && instLive(instances[key]))
+    return { code: 409, error: `${key} is already running`, already: true };
   const wtDir = path.join(DATA_HOME, "worktrees", s.name, safeBranch);
   if (!fs.existsSync(wtDir)) {
     fs.mkdirSync(path.dirname(wtDir), { recursive: true });
-    const r = git(mainDir, "worktree", "add", wtDir, branch);
+    let r = git(mainDir, "worktree", "add", wtDir, branch);
+    if (!r.ok) { // a hand-deleted worktree leaves stale metadata that blocks re-adding
+      git(mainDir, "worktree", "prune");
+      r = git(mainDir, "worktree", "add", wtDir, branch);
+    }
     if (!r.ok) return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
   }
   const port = s.port ? freePortFrom(Number(s.port) + 1) : null;
-  const envFile = s.envFile === false ? null : path.join(wtDir, s.envFile || ".env");
-  const fileEnv = envFile && fs.existsSync(envFile) ? parseEnvFile(envFile) : {};
+  // .env is usually gitignored, so a fresh worktree has none — fall back to
+  // the main checkout's. (That's the ".env collision" this feature exists for.)
+  let envFile = null;
+  if (s.envFile !== false) {
+    const rel = s.envFile || ".env";
+    envFile = fs.existsSync(path.join(wtDir, rel)) ? path.join(wtDir, rel)
+            : fs.existsSync(path.join(mainDir, rel)) ? path.join(mainDir, rel) : null;
+  }
+  const fileEnv = envFile ? parseEnvFile(envFile) : {};
+  if (envFile && envFile.startsWith(mainDir)) pushLog(key, `[stackdeck] using .env from the main checkout\n`);
   const child = spawn("bash", ["-c", s.command], {
     cwd: wtDir,
     env: { ...process.env, PATH: SHELL_PATH, ...fileEnv, ...(s.env || {}), ...(port ? { PORT: String(port) } : {}) },
@@ -870,9 +899,10 @@ function startWorktree(s, branch) {
   });
   child.stdout.on("data", (d) => pushLog(key, d));
   child.stderr.on("data", (d) => pushLog(key, d));
-  child.on("error", (e) => { pushLog(key, `[stackdeck] failed to start: ${e.message}\n`); delete instances[key]; });
-  child.on("exit", (code, sig) => { pushLog(key, `[stackdeck] exited (code=${code} signal=${sig})\n`); delete instances[key]; });
+  child.on("error", (e) => { pushLog(key, `[stackdeck] failed to start: ${e.message}\n`); delete instances[key]; saveProcs(); });
+  child.on("exit", (code, sig) => { pushLog(key, `[stackdeck] exited (code=${code} signal=${sig})\n`); delete instances[key]; saveProcs(); });
   instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now() };
+  saveProcs();
   pushLog(key, `[stackdeck] worktree instance: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtDir}\n`);
   return { code: 200, ok: true, key, port, pid: child.pid };
 }
@@ -905,7 +935,7 @@ const ALLOWED_HOSTS = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`, `[::1]:
 
 // maxHeaderSize: browsers can carry >16KB of localhost cookies from other dev
 // apps, which would hit Node's default header limit and 431 every request.
-const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => {
+const handle = async (req, res) => {
   const url = new URL(req.url, "http://localhost");
 
   // This daemon executes shell commands, so it must only answer its own page
@@ -995,8 +1025,8 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       hiddenCategories: cfg.hiddenCategories || [],
       services: cfg.services.map(serviceState),
       instances: Object.entries(instances)
-        .filter(([, i]) => i.child.exitCode === null)
-        .map(([key, i]) => ({ key, svc: i.svc, branch: i.branch, port: i.port, pid: i.child.pid, startedAt: i.startedAt })),
+        .filter(([, i]) => instLive(i))
+        .map(([key, i]) => ({ key, svc: i.svc, branch: i.branch, port: i.port, pid: instPid(i), startedAt: i.startedAt, adopted: !i.child })),
     });
 
   if (req.method === "POST" && url.pathname === "/api/worktree/start") {
@@ -1011,11 +1041,31 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   if (req.method === "POST" && url.pathname === "/api/worktree/stop") {
     const { key } = await readBody(req);
     const i = instances[key];
-    if (!i || i.child.exitCode !== null) return json(res, 404, { error: "no such running instance" });
-    const child = i.child, pid = child.pid;
+    if (!i || !instLive(i)) return json(res, 404, { error: "no such running instance" });
+    const pid = instPid(i);
     try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
-    setTimeout(() => { if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch {} } }, 5000).unref();
+    if (i.child) {
+      const child = i.child;
+      setTimeout(() => { if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch {} } }, 5000).unref();
+    } else { delete instances[key]; saveProcs(); }
     return json(res, 200, { ok: true, stopped: pid });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/worktree/remove") {
+    // Delete a stopped instance's worktree checkout (git metadata included).
+    const { name, branch } = await readBody(req);
+    const s = findSvc(name);
+    if (!s) return json(res, 404, { error: "unknown service" });
+    const safeBranch = String(branch || "").replace(/[^A-Za-z0-9._-]+/g, "-");
+    const key = `${name}@${safeBranch}`;
+    if (instances[key] && instLive(instances[key])) return json(res, 409, { error: "stop the instance first" });
+    delete instances[key];
+    const wtDir = path.join(DATA_HOME, "worktrees", name, safeBranch);
+    const r = git(svcDir(s), "worktree", "remove", "--force", wtDir);
+    git(svcDir(s), "worktree", "prune");
+    saveProcs();
+    if (!r.ok && fs.existsSync(wtDir)) return json(res, 500, { error: `git worktree remove: ${r.out.split("\n").pop()}` });
+    return json(res, 200, { ok: true });
   }
 
   if (req.method === "GET" && url.pathname === "/api/infra")
@@ -1204,7 +1254,7 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
     if (!validSvcName(b.name))
       return json(res, 400, { error: "service name must be letters/digits/dot/dash/underscore, max 64 chars" });
     let s = findSvc(b.name);
-    if (s && procs[s.name] && procs[s.name].child.exitCode === null)
+    if (s && ((procs[s.name] && procs[s.name].child.exitCode === null) || adoptedPid(s.name)))
       return json(res, 409, { error: "stop the service before editing it" });
     if (typeof b.dir !== "string" || b.dir.length > 512) return json(res, 400, { error: "bad dir" });
     let dirStat = null;
@@ -1237,6 +1287,8 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       const rw = b.readyWhen;
       if (rw && typeof rw === "object" && (typeof rw.log === "string" || typeof rw.http === "string")) {
         if (typeof rw.log === "string") { try { new RegExp(rw.log); } catch { return json(res, 400, { error: "readyWhen.log is not a valid regex" }); } }
+        if (typeof rw.http === "string" && rw.http && !/^https?:\/\//.test(rw.http))
+          return json(res, 400, { error: "readyWhen.http must start with http:// or https://" });
         s.readyWhen = { ...(typeof rw.log === "string" && rw.log ? { log: rw.log } : {}), ...(typeof rw.http === "string" && rw.http ? { http: rw.http } : {}) };
         if (!Object.keys(s.readyWhen).length) delete s.readyWhen;
       } else delete s.readyWhen;
@@ -1280,6 +1332,14 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
   }
 
   json(res, 404, { error: "not found" });
+};
+
+// maxHeaderSize: browsers can carry >16KB of localhost cookies from other dev apps.
+const server = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
+  handle(req, res).catch((e) => {
+    console.error("request error:", e);
+    try { json(res, 500, { error: `internal error: ${e.message}` }); } catch {}
+  });
 });
 
 server.on("error", (e) => {
@@ -1297,7 +1357,7 @@ server.listen(PORT, "127.0.0.1", () =>
    Browsers resolve *.localhost to loopback natively — no /etc/hosts, no PAC
    file. <service>.localhost → 127.0.0.1:<service port>. Unauthenticated by
    design (it only forwards to ports you configured); WebSockets pass through.
-   macOS allows unprivileged bind to 80; elsewhere we fall back to 8880. */
+   Port 80 usually needs privileges (or is taken); we fall back to 8880. */
 const net = require("net");
 let PROXY_PORT = null;
 const proxyTargetPort = (hostHeader) => {
@@ -1309,19 +1369,27 @@ const proxyTargetPort = (hostHeader) => {
 const proxy = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
   const port = proxyTargetPort(req.headers.host);
   if (!port) { res.writeHead(404, { "Content-Type": "text/plain" }); return res.end("stackdeck: no service with that name (or it has no port)\n"); }
-  const up = http.request({ host: "127.0.0.1", port, path: req.url, method: req.method, headers: req.headers }, (upRes) => {
+  // Host is rewritten: dev servers (Vite post-CVE, others) reject unknown hosts.
+  const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+  // host "localhost" + autoSelectFamily: dev servers bind IPv4 or IPv6-only
+  // (Vite uses [::1]) — try both families.
+  const up = http.request({ host: "localhost", autoSelectFamily: true, port, path: req.url, method: req.method, headers, timeout: 30000 }, (upRes) => {
     res.writeHead(upRes.statusCode, upRes.headers);
     upRes.pipe(res);
   });
+  up.on("timeout", () => up.destroy(new Error("upstream timed out")));
   up.on("error", (e) => { try { res.writeHead(502, { "Content-Type": "text/plain" }); res.end(`stackdeck proxy: ${e.message}\n`); } catch {} });
   req.pipe(up);
 });
 proxy.on("upgrade", (req, socket, head) => {
   const port = proxyTargetPort(req.headers.host);
   if (!port) return socket.destroy();
-  const up = net.connect(port, "127.0.0.1", () => {
+  const up = net.connect({ port, host: "localhost", autoSelectFamily: true }, () => {
     let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
-    for (let i = 0; i < req.rawHeaders.length; i += 2) raw += `${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      const h = req.rawHeaders[i].toLowerCase() === "host" ? `127.0.0.1:${port}` : req.rawHeaders[i + 1];
+      raw += `${req.rawHeaders[i]}: ${h}\r\n`;
+    }
     up.write(raw + "\r\n");
     if (head && head.length) up.write(head);
     socket.pipe(up).pipe(socket);
