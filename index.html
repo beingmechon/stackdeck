@@ -158,9 +158,25 @@
   <span id="summary"></span>
   <span class="spacer"></span>
   <button class="ghost" id="hiddenToggle" onclick="toggleHidden()" title="show/hide the items you've hidden"></button>
+  <button class="ghost" onclick="toggleSettings()">settings</button>
   <span class="paths" id="metaPaths"></span>
 </header>
 <main>
+  <div class="ledger" id="settings" style="display:none; margin-top:18px">
+    <div class="drawer open" style="padding:14px 16px">
+      <div class="fields" style="grid-template-columns:110px 1fr">
+        <label>project roots</label>
+        <textarea id="cfg-roots" rows="2" placeholder="~/Projects&#10;~/work — one folder per line"></textarea>
+        <label>category order</label>
+        <textarea id="cfg-cats" rows="3" placeholder="one category per line; unlisted ones sort alphabetically, Uncategorized last"></textarea>
+        <label></label>
+        <div style="display:flex; gap:8px; align-items:center">
+          <button onclick="saveConfig()">Save</button>
+          <span class="cmdline" id="cfg-path"></span>
+        </div>
+      </div>
+    </div>
+  </div>
   <div class="section-label">Services <span class="count" id="svc-count"></span>
     <span style="margin-left:auto; display:flex; gap:4px">
       <button class="ghost" onclick="collapseAll('g', true)">collapse all</button>
@@ -173,6 +189,7 @@
   <div class="section-label">
     Projects <span class="count" id="proj-count"></span>
     <span style="margin-left:auto; display:flex; gap:4px; align-items:center">
+      <button class="ghost" onclick="refreshProjects()" title="rescan project roots for new folders">↻ refresh</button>
       <button class="ghost" onclick="collapseAll('c', true)">collapse all</button>
       <button class="ghost" onclick="collapseAll('c', false)">expand all</button>
       <input id="filter" type="search" placeholder="filter ~/Projects…" oninput="renderProjects()">
@@ -588,13 +605,46 @@ async function loadServices(force) {
   }
   catch (e) { toast("DevBoard server unreachable: " + e.message, true); }
 }
-async function loadProjects() {
-  try { projects = await api("/api/projects"); renderProjects(); } catch {}
+async function loadProjects(fresh) {
+  try { projects = await api("/api/projects" + (fresh ? "?fresh" : "")); renderProjects(); } catch {}
+}
+async function refreshProjects() {
+  const before = projects.length;
+  await loadProjects(true);
+  const diff = projects.length - before;
+  toast(diff > 0 ? `rescanned — ${diff} new project${diff > 1 ? "s" : ""} found`
+      : diff < 0 ? `rescanned — ${-diff} project${diff < -1 ? "s" : ""} gone`
+      : "rescanned — no changes");
+}
+
+/* ---------- settings ---------- */
+
+let meta = null;
+function toggleSettings() {
+  const el = document.getElementById("settings");
+  const show = el.style.display === "none";
+  el.style.display = show ? "" : "none";
+  if (show && meta) {
+    document.getElementById("cfg-roots").value = meta.projectRoots.join("\n");
+    document.getElementById("cfg-cats").value = (meta.categoryOrder || []).join("\n");
+    document.getElementById("cfg-path").textContent = "saved to " + meta.configPath;
+  }
+}
+async function saveConfig() {
+  const lines = (id) => document.getElementById(id).value.split("\n").map(s => s.trim()).filter(Boolean);
+  try {
+    await api("/api/config", { projectRoots: lines("cfg-roots"), categoryOrder: lines("cfg-cats") });
+    toast("settings saved");
+    document.getElementById("settings").style.display = "none";
+    await loadMeta();
+    await loadProjects(true);
+  } catch (e) { toast(e.message, true); }
 }
 async function load() { await Promise.all([loadServices(), loadProjects()]); }
 async function loadMeta() {
   try {
     const m = await api("/api/meta");
+    meta = m;
     if (m.categoryOrder && m.categoryOrder.length) CAT_ORDER = [...m.categoryOrder, "Uncategorized"];
     const short = p => p.replace(/^\/(Users|home)\/[^/]+/, "~");
     document.getElementById("metaPaths").textContent =

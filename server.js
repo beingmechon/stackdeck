@@ -291,6 +291,24 @@ const server = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => 
       categoryOrder: cfg.categoryOrder || [],
     });
 
+  if (req.method === "POST" && url.pathname === "/api/config") {
+    // UI-editable settings. Only whitelisted fields; strings trimmed, empties dropped.
+    const b = await readBody(req);
+    const strList = (v) => Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : null;
+    const roots = strList(b.projectRoots);
+    if (roots) {
+      if (!roots.length) return json(res, 400, { error: "at least one project root is required" });
+      const missing = roots.filter((r) => !fs.existsSync(expand(r)));
+      if (missing.length) return json(res, 400, { error: `not a directory: ${missing.join(", ")}` });
+      cfg.projectRoots = roots;
+    }
+    const order = strList(b.categoryOrder);
+    if (order !== null) cfg.categoryOrder = order;
+    saveCfg();
+    projCache.t = 0;
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/services")
     return json(res, 200, {
       groups: cfg.groups,
