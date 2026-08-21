@@ -175,23 +175,45 @@ function inferCommand(dir) {
 function scanProjects() {
   const out = [];
   const excluded = new Set((cfg.excludes || []).map(expand));
+  const pc = cfg.projectCategories || {};
+  const entry = (dir, name, root, catKeys) => ({
+    name,
+    dir,
+    root,
+    isGit: fs.existsSync(path.join(dir, ".git")),
+    branch: gitBranchFast(dir),
+    suggestedCommand: inferCommand(dir),
+    configured: cfg.services.some((s) => svcDir(s) === dir || svcDir(s).startsWith(dir + path.sep)),
+    category: catKeys.map((k) => pc[k]).find(Boolean) || "Uncategorized",
+  });
+  const lsDirs = (p) => {
+    try { return fs.readdirSync(p, { withFileTypes: true }).filter((x) => x.isDirectory() && !x.name.startsWith(".")); }
+    catch { return []; }
+  };
   for (const root of cfg.projectRoots.map(expand)) {
-    let entries;
-    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    for (const e of lsDirs(root)) {
       const dir = path.join(root, e.name);
       if (excluded.has(dir)) continue;
-      out.push({
-        name: e.name,
-        dir,
-        root,
-        isGit: fs.existsSync(path.join(dir, ".git")),
-        branch: gitBranchFast(dir),
-        suggestedCommand: inferCommand(dir),
-        configured: cfg.services.some((s) => svcDir(s) === dir || svcDir(s).startsWith(dir + path.sep)),
-        category: (cfg.projectCategories || {})[e.name] || "Uncategorized",
-      });
+      // A real project: it's a git repo or we know how to run it.
+      if (fs.existsSync(path.join(dir, ".git")) || inferCommand(dir)) {
+        out.push(entry(dir, e.name, root, [e.name]));
+        continue;
+      }
+      // Container folder: not a repo itself, but may hold repos one level
+      // down (e.g. symphony/repo.symphony_appstore). Surface those instead,
+      // inheriting the container's category unless mapped individually.
+      const subs = lsDirs(dir)
+        .map((s) => path.join(dir, s.name))
+        .filter((sdir) => !excluded.has(sdir))
+        .filter((sdir) => fs.existsSync(path.join(sdir, ".git")) || inferCommand(sdir));
+      if (subs.length) {
+        for (const sdir of subs) {
+          const sub = path.basename(sdir);
+          out.push(entry(sdir, `${e.name}/${sub}`, root, [`${e.name}/${sub}`, sub, e.name]));
+        }
+      } else {
+        out.push(entry(dir, e.name, root, [e.name])); // plain folder, listed as-is
+      }
     }
   }
   out.sort((a, b) => (b.suggestedCommand ? 1 : 0) - (a.suggestedCommand ? 1 : 0) || a.name.localeCompare(b.name));

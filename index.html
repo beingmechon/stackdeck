@@ -528,7 +528,7 @@ function renderProjects() {
 async function configure(name) {
   const p = projects.find(x => x.name === name);
   if (!p) return;
-  let svcName = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+  let svcName = name.split("/").pop().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
   if (services.some(s => s.name === svcName)) svcName += "-2";
   try {
     await api("/api/service", { name: svcName, dir: p.dir, command: p.suggestedCommand || "echo set a command" });
