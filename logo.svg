@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Stackdeck logo">
+  <!-- Three service rows stepping up: the stack. Top row is live. -->
+  <rect x="16" y="44" width="34" height="10" rx="5" fill="#57534b"/>
+  <rect x="11" y="29" width="34" height="10" rx="5" fill="#8a8375"/>
+  <rect x="6"  y="14" width="34" height="10" rx="5" fill="#dfa662"/>
+  <circle cx="48" cy="19" r="4.5" fill="#5ec488"/>
+  <circle cx="48" cy="19" r="7.5" fill="#5ec488" opacity="0.25"/>
+</svg>

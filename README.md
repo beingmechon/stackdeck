@@ -1,4 +1,4 @@
-# Stackdeck
+<img src="logo-wordmark.svg" alt="Stackdeck" height="52">
 
 **Your projects folder, as a control panel.**
 

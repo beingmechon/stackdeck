@@ -6,6 +6,7 @@ APP="$HOME/Applications/Stackdeck.app"
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$REPO/server.js" "$REPO/index.html" "$APP/Contents/Resources/"
+[ -f "$REPO/scripts/Stackdeck.icns" ] && cp "$REPO/scripts/Stackdeck.icns" "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -18,6 +19,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleVersion</key>         <string>0.1.0</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
   <key>CFBundleExecutable</key>      <string>Stackdeck</string>
+  <key>CFBundleIconFile</key>        <string>Stackdeck</string>
   <key>LSUIElement</key>             <true/>
 </dict>
 </plist>
