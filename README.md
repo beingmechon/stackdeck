@@ -69,8 +69,8 @@ npm link                     # then: stackdeck | stackdeck status | stackdeck lo
 - **Parallel branches (worktrees)** — pick a branch and hit ⧉: the service
   runs that branch in its own git worktree with a free port injected as
   `$PORT`, side by side with the main checkout. Made for the
-  several-agents-on-several-branches workflow. Instances are ephemeral (they
-  don't survive daemon restarts) and worktrees are reused across runs.
+  several-agents-on-several-branches workflow. Instances survive daemon
+  restarts (re-adopted like services) and worktrees are reused across runs.
 - **CLI parity** — `stackdeck status|start|stop|restart|logs <name>` talks to
   the same daemon.
 - **MCP server** — `stackdeck mcp` exposes list/start/stop/restart/logs as
