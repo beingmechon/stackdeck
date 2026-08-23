@@ -207,6 +207,7 @@ const clients = nul(); // name -> Set<res> (SSE)
 const PROCS_PATH = path.join(HOME_DIR, "procs.json");
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const instances = nul(); // "svc@branch" -> { svc, branch, dir, port, startedAt, child? OR pid (adopted) }
+const extKills = nul();  // name -> { pid, at } — recently killed externals, to spot supervisor resurrection
 const instLive = (i) => (i.child ? i.child.exitCode === null : alive(i.pid));
 const instPid = (i) => (i.child ? i.child.pid : i.pid);
 const adopted = nul();
@@ -294,6 +295,8 @@ function serviceState(s) {
   const p = procs[s.name];
   const managedUp = p && p.child.exitCode === null;
   const pid = managedUp ? p.child.pid : (portPid(s.port) ?? adoptedPid(s.name));
+  const rk = extKills[s.name];
+  const resurrected = !!(rk && !managedUp && pid && pid !== rk.pid && Date.now() - rk.at < 120000);
   const g = gitInfo(dir);
   return {
     ...s,
@@ -303,6 +306,7 @@ function serviceState(s) {
     startedBranch: p ? p.branch : null,
     startedAt: p ? p.startedAt : null,
     lastExit: lastExit[s.name] || null,
+    resurrected,
     restartPending: !!(restarts[s.name] && restarts[s.name].timer && !managedUp && restarts[s.name].n > 0 && restarts[s.name].n <= 5),
     branch: g.branch, branches: g.branches, dirty: g.dirty, isGit: g.isGit,
   };
@@ -801,7 +805,7 @@ async function startWithDeps(names, force) {
   return results;
 }
 
-function stopService(s) {
+async function stopService(s) {
   const rt = restarts[s.name];
   if (rt) { clearTimeout(rt.timer); rt.n = 0; } // a manual stop cancels pending auto-restarts
   const p = procs[s.name];
@@ -816,6 +820,7 @@ function stopService(s) {
     }, 5000).unref();
     return { code: 200, ok: true, stopped: pid };
   }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const adPid = adoptedPid(s.name);
   if (adPid) { // started by a previous daemon instance: we know its group
     try { process.kill(-adPid, "SIGTERM"); } catch { try { process.kill(adPid, "SIGTERM"); } catch {} }
@@ -828,9 +833,25 @@ function stopService(s) {
   bustPortCache();
   const ext = portPid(s.port);
   if (ext) {
+    // External processes may be supervised (brew services/launchd/systemd):
+    // verify the kill sticks, escalate politely, and report resurrection
+    // honestly instead of letting the row quietly turn green again.
     try { process.kill(ext, "SIGTERM"); } catch (e) { return { code: 500, error: `kill ${ext} failed: ${e.message}` }; }
-    bustPortCache();
+    let now = ext;
+    for (let i = 0; i < 8 && now === ext; i++) { await sleep(250); bustPortCache(); now = portPid(s.port); }
+    if (now === ext) { // SIGTERM ignored — postgres, for one, "smart-waits"; SIGINT is its fast shutdown
+      try { process.kill(ext, "SIGINT"); } catch {}
+      for (let i = 0; i < 8 && now === ext; i++) { await sleep(250); bustPortCache(); now = portPid(s.port); }
+    }
+    if (now === ext)
+      return { code: 409, error: `pid ${ext} ignored SIGTERM and SIGINT — it looks like a system-managed daemon; stop it with its own manager (e.g. brew services stop …)` };
     pushLog(s.name, `[stackdeck] killed external pid ${ext} on port ${s.port}\n`);
+    extKills[s.name] = { pid: ext, at: Date.now() };
+    if (now) { // something already took the port back: a supervisor restarted it
+      pushLog(s.name, `[stackdeck] a supervisor restarted it as pid ${now}\n`);
+      return { code: 200, ok: true, stopped: ext, resurrected: now,
+               note: `${s.name}: killed pid ${ext}, but a supervisor (launchd/brew?) restarted it as pid ${now} — stop it with its own manager instead` };
+    }
     return { code: 200, ok: true, stopped: ext, external: true };
   }
   return { code: 409, error: `${s.name} is not running` };
@@ -838,7 +859,7 @@ function stopService(s) {
 
 async function restartService(s) {
   const wasBranch = procs[s.name] ? procs[s.name].branch : null;
-  const r = stopService(s);
+  const r = await stopService(s);
   if (r.error && r.code !== 409) return r;
   for (let i = 0; i < 30; i++) { // wait up to ~6s for the port/process to clear
     const p = procs[s.name];
@@ -1115,7 +1136,7 @@ const handle = async (req, res) => {
     const { name } = await readBody(req);
     const s = findSvc(name);
     if (!s) return json(res, 404, { error: "unknown service" });
-    const r = stopService(s);
+    const r = await stopService(s);
     return json(res, r.code, r);
   }
 

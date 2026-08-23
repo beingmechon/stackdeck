@@ -341,7 +341,9 @@ async function stopAll(group) {
   if (!targets.length) return toast("nothing to stop");
   const r = await Promise.allSettled(targets.map(s => api("/api/stop", { name: s.name })));
   const ok = r.filter(x => x.status === "fulfilled").length;
-  toast(`stopped ${ok}/${targets.length}`);
+  const notes = r.filter(x => x.status === "fulfilled" && x.value.note).map(x => x.value.note);
+  const errs = r.filter(x => x.status === "rejected").map(x => x.reason.message);
+  toast([`stopped ${ok}/${targets.length}`, ...notes, ...errs].join(" · "), notes.length + errs.length > 0);
   setTimeout(() => loadServices(true), 500);
 }
 
@@ -392,7 +394,9 @@ function svcRow(s) {
             ondragstart="dragStart(event,'${esc(s.name)}')" ondragend="dragEnd()">⠿</span>
       <span class="dot ${s.running ? "up" : ""}"></span>
       <span class="svc-name">${esc(s.name)}</span>
-      ${s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
+      ${s.resurrected
+        ? '<span class="badge crash" title="Stackdeck killed it, but a supervisor (brew services / launchd / systemd) restarted it — stop it with its own manager, e.g. brew services stop">auto-restarted</span>'
+        : s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
       ${s.restartPending ? '<span class="badge dirty" title="crashed; auto-restart scheduled">restarting…</span>' : ""}
       ${!s.running && !s.restartPending && s.lastExit && !s.lastExit.expected && s.lastExit.code !== 0
         ? `<span class="badge crash" title="exited with code ${s.lastExit.code}">crashed</span>` : ""}
@@ -771,7 +775,10 @@ async function start(name, force) {
   loadServices(true);
 }
 async function stop(name) {
-  try { await api("/api/stop", { name }); toast(name + " killed"); }
+  try {
+    const r = await api("/api/stop", { name });
+    toast(r.note || name + " killed", !!r.note);
+  }
   catch (e) { toast(e.message, true); }
   setTimeout(loadServices, 400);
 }
