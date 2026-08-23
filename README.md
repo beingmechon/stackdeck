@@ -2,6 +2,10 @@
 
 **Your projects folder, as a control panel.**
 
+<img src="docs/screenshot.png" alt="The Stackdeck board: sections of services with live status, a parallel worktree instance of orders-api running a feature branch on its own port" width="100%">
+
+*(Fictional demo data — spin it up yourself with `./scripts/demo.sh`.)*
+
 A browser dashboard for the services you run every day in local development.
 Stackdeck scans your projects folder, figures out how to run each repo, and
 gives you Start / Kill / restart buttons, live logs, and a **git branch
