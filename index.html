@@ -217,8 +217,6 @@
   .chev.closed { transform:rotate(-90deg); }
 
   /* settings: folder tree */
-  .cfg-label { font-size:12px; font-weight:600; color:var(--dim); letter-spacing:.04em; margin:2px 0 8px; }
-  .cfg-label .count { color:var(--faint); font-weight:500; }
   .root-row {
     display:flex; align-items:center; gap:10px; padding:6px 0;
     font-family:var(--mono); font-size:13px;
@@ -324,8 +322,49 @@
   [data-theme="austere"] .section-label { letter-spacing:.18em; }
   [data-theme="austere"] .drawer.open, [data-theme="austere"] .badge.crash, [data-theme="austere"] .badge.dirty { animation:none; }
 
-  /* theme picker (settings) */
-  button[data-tbtn][aria-pressed="true"] { border-color:var(--accent); color:var(--text); }
+  /* settings panel: title + hint rail on the left, controls on the right */
+  .cfg-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:13px 18px; border-bottom:1px solid var(--hairline);
+    font-size:13px; font-weight:650;
+  }
+  .cfg-head button { font-size:15px; padding:2px 9px; }
+  .cfg-section {
+    display:grid; grid-template-columns:220px minmax(0, 1fr); gap:8px 28px;
+    padding:18px; border-bottom:1px solid var(--hairline); align-items:start;
+  }
+  .cfg-title { font-size:13px; font-weight:600; margin-bottom:5px; }
+  .cfg-hint { color:var(--faint); font-size:12px; line-height:1.5; padding-right:8px; }
+  .cfg-foot { display:flex; gap:12px; align-items:center; padding:14px 18px; }
+  @media (max-width: 900px) {
+    .cfg-section { grid-template-columns:1fr; }
+  }
+
+  /* theme swatches */
+  .swatches { display:flex; gap:8px; flex-wrap:wrap; }
+  .swatch {
+    display:flex; align-items:center; gap:9px; padding:6px 13px 6px 7px;
+    background:var(--bg); border:1px solid var(--border); border-radius:var(--r);
+    font:500 12px var(--sans); color:var(--dim); cursor:pointer;
+  }
+  .swatch:hover { border-color:var(--dim); color:var(--text); }
+  .swatch[aria-pressed="true"] { border-color:var(--accent); color:var(--text); }
+  .swatch .sw {
+    width:36px; height:24px; border-radius:5px; border:1px solid var(--hairline);
+    position:relative; flex:none;
+  }
+  .swatch .sw i { position:absolute; width:8px; height:8px; border-radius:50%; top:8px; }
+  .swatch .sw i:first-child { left:7px; }
+  .swatch .sw i:last-child { left:19px; }
+
+  /* theme editor knobs */
+  .knobs {
+    display:grid; grid-template-columns:92px minmax(120px, 300px) 54px;
+    gap:9px 14px; align-items:center;
+  }
+  .knobs label { color:var(--dim); font-size:12px; text-align:right; }
+  .knobs .knob-val { color:var(--faint); font-size:11px; font-family:var(--mono); }
+  .knobs select { max-width:120px; }
 </style>
 </head>
 <body>
@@ -339,55 +378,80 @@
 </header>
 <main>
   <div class="ledger" id="settings" style="display:none; margin-top:18px">
-    <div class="drawer open" style="padding:16px 18px">
-      <div class="cfg-label">Scanned folders <span class="count">tick a subfolder to include it, untick to exclude</span></div>
-      <div id="cfg-roots-list"></div>
-      <div id="cfg-browser" style="display:none"></div>
-      <button class="ghost" onclick="browseFolders()">+ add folder…</button>
-      <div class="cfg-label" style="margin-top:16px">Project categories <span class="count">drag or use the arrows to change board order</span></div>
-      <div id="cfg-cats" class="cat-list"></div>
-      <div class="cfg-label" style="margin-top:16px">Theme <span class="count">applies immediately, saved to config</span></div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap">
-        <button class="ghost" data-tbtn="" onclick="applyTheme('', true)">calm</button>
-        <button class="ghost" data-tbtn="playful" onclick="applyTheme('playful', true)">playful</button>
-        <button class="ghost" data-tbtn="austere" onclick="applyTheme('austere', true)">austere</button>
-        <button class="ghost" data-tbtn="custom" onclick="applyTheme('custom', true)">custom…</button>
+    <div class="cfg-head">
+      <span role="heading" aria-level="2">Settings</span>
+      <button class="ghost" aria-label="close settings" onclick="toggleSettings()">×</button>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-info">
+        <div class="cfg-title">Scanned folders</div>
+        <div class="cfg-hint">Where Stackdeck looks for projects. Tick a subfolder to include it, untick to exclude.</div>
       </div>
-      <div id="theme-editor" style="display:none; margin-top:10px">
-        <div class="fields" style="grid-template-columns:110px 1fr 52px; max-width:520px">
-          <label for="tk-hue">base hue</label>
-          <input type="range" id="tk-hue" min="0" max="360" step="1" value="75" oninput="knob('hue', this.value)">
-          <span class="count" id="tkv-hue">75</span>
-          <label for="tk-tint">warmth</label>
-          <input type="range" id="tk-tint" min="0" max="0.05" step="0.002" value="0.01" oninput="knob('tint', this.value)">
-          <span class="count" id="tkv-tint">0.01</span>
-          <label for="tk-bgL">dark ↔ light</label>
-          <input type="range" id="tk-bgL" min="0.08" max="0.98" step="0.005" value="0.145" oninput="knob('bgL', this.value)">
-          <span class="count" id="tkv-bgL">0.145</span>
-          <label for="tk-accentHue">accent hue</label>
-          <input type="range" id="tk-accentHue" min="0" max="360" step="1" value="68" oninput="knob('accentHue', this.value)">
-          <span class="count" id="tkv-accentHue">68</span>
-          <label for="tk-accentC">accent pop</label>
-          <input type="range" id="tk-accentC" min="0" max="0.25" step="0.005" value="0.115" oninput="knob('accentC', this.value)">
-          <span class="count" id="tkv-accentC">0.115</span>
-          <label for="tk-radius">corners</label>
-          <input type="range" id="tk-radius" min="0" max="18" step="1" value="7" oninput="knob('radius', this.value)">
-          <span class="count" id="tkv-radius">7</span>
-          <label for="tk-font">font</label>
-          <select id="tk-font" style="max-width:120px" onchange="knob('font', this.value)">
-            <option value="sans">sans</option>
-            <option value="mono">mono</option>
-          </select>
-          <span></span>
-          <label></label>
-          <div><button class="ghost" onclick="resetKnobs()">reset to calm defaults</button></div>
-          <span></span>
+      <div class="cfg-body">
+        <div id="cfg-roots-list"></div>
+        <div id="cfg-browser" style="display:none"></div>
+        <button class="ghost" onclick="browseFolders()">+ add folder…</button>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-info">
+        <div class="cfg-title">Project categories</div>
+        <div class="cfg-hint">The order they appear on the board. Drag, or use the arrows.</div>
+      </div>
+      <div class="cfg-body">
+        <div id="cfg-cats" class="cat-list"></div>
+      </div>
+    </div>
+    <div class="cfg-section">
+      <div class="cfg-info">
+        <div class="cfg-title">Theme</div>
+        <div class="cfg-hint">Applies immediately and saves on its own. Pick custom to tune every color.</div>
+      </div>
+      <div class="cfg-body">
+        <div class="swatches">
+          <button class="swatch" data-tbtn="" onclick="applyTheme('', true)">
+            <span class="sw" style="background:oklch(0.145 0.008 75)" aria-hidden="true"><i style="background:oklch(0.78 0.115 68)"></i><i style="background:oklch(0.74 0.145 152)"></i></span>calm</button>
+          <button class="swatch" data-tbtn="playful" onclick="applyTheme('playful', true)">
+            <span class="sw" style="background:oklch(0.17 0.03 200)" aria-hidden="true"><i style="background:oklch(0.74 0.16 35)"></i><i style="background:oklch(0.78 0.16 155)"></i></span>playful</button>
+          <button class="swatch" data-tbtn="austere" onclick="applyTheme('austere', true)">
+            <span class="sw" style="background:oklch(0.13 0.003 80)" aria-hidden="true"><i style="background:oklch(0.85 0.02 85)"></i><i style="background:oklch(0.78 0.09 150)"></i></span>austere</button>
+          <button class="swatch" data-tbtn="custom" onclick="applyTheme('custom', true)">
+            <span class="sw" style="background:conic-gradient(oklch(0.7 0.15 20), oklch(0.8 0.15 90), oklch(0.75 0.15 150), oklch(0.7 0.15 230), oklch(0.7 0.15 310), oklch(0.7 0.15 20))" aria-hidden="true"></span>custom…</button>
+        </div>
+        <div id="theme-editor" style="display:none; margin-top:14px">
+          <div class="knobs">
+            <label for="tk-hue">base hue</label>
+            <input type="range" id="tk-hue" min="0" max="360" step="1" value="75" oninput="knob('hue', this.value)">
+            <span class="knob-val" id="tkv-hue">75</span>
+            <label for="tk-tint">warmth</label>
+            <input type="range" id="tk-tint" min="0" max="0.05" step="0.002" value="0.01" oninput="knob('tint', this.value)">
+            <span class="knob-val" id="tkv-tint">0.01</span>
+            <label for="tk-bgL">dark ↔ light</label>
+            <input type="range" id="tk-bgL" min="0.08" max="0.98" step="0.005" value="0.145" oninput="knob('bgL', this.value)">
+            <span class="knob-val" id="tkv-bgL">0.145</span>
+            <label for="tk-accentHue">accent hue</label>
+            <input type="range" id="tk-accentHue" min="0" max="360" step="1" value="68" oninput="knob('accentHue', this.value)">
+            <span class="knob-val" id="tkv-accentHue">68</span>
+            <label for="tk-accentC">accent pop</label>
+            <input type="range" id="tk-accentC" min="0" max="0.25" step="0.005" value="0.115" oninput="knob('accentC', this.value)">
+            <span class="knob-val" id="tkv-accentC">0.115</span>
+            <label for="tk-radius">corners</label>
+            <input type="range" id="tk-radius" min="0" max="18" step="1" value="7" oninput="knob('radius', this.value)">
+            <span class="knob-val" id="tkv-radius">7</span>
+            <label for="tk-font">font</label>
+            <select id="tk-font" onchange="knob('font', this.value)">
+              <option value="sans">sans</option>
+              <option value="mono">mono</option>
+            </select>
+            <span></span>
+          </div>
+          <button class="ghost" style="margin-top:10px" onclick="resetKnobs()">reset to calm defaults</button>
         </div>
       </div>
-      <div style="display:flex; gap:10px; align-items:center; margin-top:12px">
-        <button onclick="saveConfig()">Save</button>
-        <span class="cmdline" id="cfg-path"></span>
-      </div>
+    </div>
+    <div class="cfg-foot">
+      <button onclick="saveConfig()">Save folders &amp; categories</button>
+      <span class="cmdline" id="cfg-path"></span>
     </div>
   </div>
   <div class="section-label"><span role="heading" aria-level="2">Services</span> <span class="count" id="svc-count"></span>
