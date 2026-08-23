@@ -1,0 +1,25 @@
+name: Publish to npm
+
+# Publishes via npm Trusted Publishing (OIDC) — no tokens, no OTP.
+# Triggered by pushing a version tag: git tag v0.5.0 && git push origin v0.5.0
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  id-token: write # OIDC token for npm provenance
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # trusted publishing requires npm >= 11.5.1
+      - run: npm install -g npm@latest
+      - run: npm publish
