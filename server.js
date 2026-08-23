@@ -22,7 +22,7 @@ const path = require("path");
 const os = require("os");
 const { spawn, execFileSync } = require("child_process");
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const ROOT = __dirname;
 
 /* ---------- state directory & config ---------- */
@@ -1008,6 +1008,8 @@ const handle = async (req, res) => {
       categoryOrder: cfg.categoryOrder || [],
       excludes: cfg.excludes || [],
       proxyPort: PROXY_PORT,
+      theme: cfg.theme || "",
+      themeTokens: cfg.themeTokens || null,
     });
 
   if (req.method === "POST" && url.pathname === "/api/config") {
@@ -1025,6 +1027,22 @@ const handle = async (req, res) => {
     if (order !== null) cfg.categoryOrder = order;
     const excludes = strList(b.excludes);
     if (excludes !== null) cfg.excludes = excludes;
+    if (b.theme !== undefined) {
+      const t = String(b.theme);
+      if (!["", "playful", "austere", "custom"].includes(t)) return json(res, 400, { error: "unknown theme" });
+      cfg.theme = t;
+    }
+    if (b.themeTokens !== undefined && typeof b.themeTokens === "object" && b.themeTokens) {
+      // numeric knobs only, clamped — nothing here ever reaches a shell or HTML
+      const lim = { hue: [0, 360], tint: [0, 0.05], bgL: [0.08, 0.99], accentHue: [0, 360], accentC: [0, 0.25], radius: [0, 20] };
+      const tk = {};
+      for (const [k, [lo, hi]] of Object.entries(lim)) {
+        const v = Number(b.themeTokens[k]);
+        if (Number.isFinite(v)) tk[k] = Math.min(hi, Math.max(lo, v));
+      }
+      if (b.themeTokens.font === "mono" || b.themeTokens.font === "sans") tk.font = b.themeTokens.font;
+      cfg.themeTokens = tk;
+    }
     saveCfg();
     projCache.t = 0;
     return json(res, 200, { ok: true });

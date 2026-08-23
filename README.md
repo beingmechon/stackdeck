@@ -51,9 +51,13 @@ node bin/stackdeck.js
 - **Git-aware** — a branch dropdown per service; picking a branch runs
   `git checkout` before start, refused while the tree is dirty. Dirty repos
   are badged.
-- **Organize the board** — drag rows between your own sections, per-section
-  *start all* / *stop all*, collapse/expand, hide/unhide anything, categorize
-  the project list.
+- **Organize the board** — drag rows between your own sections (or move by
+  keyboard), per-section *start all* / *stop all*, collapse/expand,
+  hide/unhide anything, categorize the project list.
+- **Themes** — three built-ins (calm, playful, austere) plus a custom theme
+  editor in settings: base hue, warmth, a dark↔light slider, accent color,
+  corner radius, sans/mono. Every token is derived, so a full light theme is
+  one slider away. Saved to config, or per-tab via `?theme=`.
 - **Stacks that start in order** — give a service `dependsOn` and it starts
   after its dependencies are *ready* (a log-line regex via `readyWhen`, an
   HTTP check, or its port opening). Section **start all** is
@@ -103,6 +107,7 @@ editable from the UI; the interesting ones:
   "categoryOrder": ["Products", "Tools"],     // display order of project categories
   "projectCategories": { "my-repo": "Products" },
   "groups": ["Stack A"],                      // your service sections
+  "theme": "playful",                         // or austere / custom (editor in settings)
   "services": [
     {
       "name": "api",

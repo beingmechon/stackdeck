@@ -173,12 +173,14 @@
   .fields { display:grid; grid-template-columns:64px 1fr; gap:7px 12px; align-items:center; max-width:720px; }
   .fields label { color:var(--faint); font-size:12px; text-align:right; }
 
+  /* the log pane is a terminal: always dark, own text colors, in every theme
+     (ANSI palette + readability hold even when the board itself is light) */
   .logs {
     background:oklch(0.10 0.006 75); border:1px solid var(--hairline); border-radius:var(--r);
     padding:10px 12px; height:250px; overflow:auto; overscroll-behavior:contain;
-    font-family:var(--mono); font-size:12px; line-height:1.55; white-space:pre-wrap; color:var(--dim);
+    font-family:var(--mono); font-size:12px; line-height:1.55; white-space:pre-wrap; color:oklch(0.72 0.010 80);
   }
-  .logs:empty::before { content:"waiting for output…"; color:var(--faint); font-style:italic; }
+  .logs:empty::before { content:"waiting for output…"; color:oklch(0.62 0.010 80); font-style:italic; }
   .logs::-webkit-scrollbar { width:8px; }
   .logs::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
   .logs::-webkit-scrollbar-track { background:transparent; }
@@ -261,9 +263,10 @@
     opacity:0; pointer-events:none; transition:opacity .2s var(--ease), transform .2s var(--ease);
   }
   .toast.show { opacity:1; transform:translate(-50%, 0); }
-  .toast.err { border-color:var(--red); color:oklch(0.85 0.06 26); }
+  .toast.err { border-color:var(--red); color:var(--red); }
+  input[type="range"] { accent-color:var(--accent); padding:0; border:none; background:transparent; }
 
-  /* ---- candidate theme B: playful (?theme=playful — under evaluation) ---- */
+  /* ---- theme: playful ---- */
   [data-theme="playful"] {
     --bg:        oklch(0.17 0.03 200);
     --surface:   oklch(0.21 0.035 205);
@@ -292,7 +295,7 @@
   [data-theme="playful"] .section-label { color:var(--accent); }
   [data-theme="playful"] .drawer.open { animation-duration:.24s; }
 
-  /* ---- candidate theme C: austere (?theme=austere — under evaluation) ---- */
+  /* ---- theme: austere ---- */
   [data-theme="austere"] {
     --bg:        oklch(0.13 0.003 80);
     --surface:   oklch(0.15 0.004 80);
@@ -343,11 +346,43 @@
       <button class="ghost" onclick="browseFolders()">+ add folder…</button>
       <div class="cfg-label" style="margin-top:16px">Project categories <span class="count">drag or use the arrows to change board order</span></div>
       <div id="cfg-cats" class="cat-list"></div>
-      <div class="cfg-label" style="margin-top:16px">Theme <span class="count">applies immediately, saved in this browser</span></div>
-      <div style="display:flex; gap:6px">
-        <button class="ghost" data-tbtn="" onclick="setTheme('')">calm</button>
-        <button class="ghost" data-tbtn="playful" onclick="setTheme('playful')">playful</button>
-        <button class="ghost" data-tbtn="austere" onclick="setTheme('austere')">austere</button>
+      <div class="cfg-label" style="margin-top:16px">Theme <span class="count">applies immediately, saved to config</span></div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap">
+        <button class="ghost" data-tbtn="" onclick="applyTheme('', true)">calm</button>
+        <button class="ghost" data-tbtn="playful" onclick="applyTheme('playful', true)">playful</button>
+        <button class="ghost" data-tbtn="austere" onclick="applyTheme('austere', true)">austere</button>
+        <button class="ghost" data-tbtn="custom" onclick="applyTheme('custom', true)">custom…</button>
+      </div>
+      <div id="theme-editor" style="display:none; margin-top:10px">
+        <div class="fields" style="grid-template-columns:110px 1fr 52px; max-width:520px">
+          <label for="tk-hue">base hue</label>
+          <input type="range" id="tk-hue" min="0" max="360" step="1" value="75" oninput="knob('hue', this.value)">
+          <span class="count" id="tkv-hue">75</span>
+          <label for="tk-tint">warmth</label>
+          <input type="range" id="tk-tint" min="0" max="0.05" step="0.002" value="0.01" oninput="knob('tint', this.value)">
+          <span class="count" id="tkv-tint">0.01</span>
+          <label for="tk-bgL">dark ↔ light</label>
+          <input type="range" id="tk-bgL" min="0.08" max="0.98" step="0.005" value="0.145" oninput="knob('bgL', this.value)">
+          <span class="count" id="tkv-bgL">0.145</span>
+          <label for="tk-accentHue">accent hue</label>
+          <input type="range" id="tk-accentHue" min="0" max="360" step="1" value="68" oninput="knob('accentHue', this.value)">
+          <span class="count" id="tkv-accentHue">68</span>
+          <label for="tk-accentC">accent pop</label>
+          <input type="range" id="tk-accentC" min="0" max="0.25" step="0.005" value="0.115" oninput="knob('accentC', this.value)">
+          <span class="count" id="tkv-accentC">0.115</span>
+          <label for="tk-radius">corners</label>
+          <input type="range" id="tk-radius" min="0" max="18" step="1" value="7" oninput="knob('radius', this.value)">
+          <span class="count" id="tkv-radius">7</span>
+          <label for="tk-font">font</label>
+          <select id="tk-font" style="max-width:120px" onchange="knob('font', this.value)">
+            <option value="sans">sans</option>
+            <option value="mono">mono</option>
+          </select>
+          <span></span>
+          <label></label>
+          <div><button class="ghost" onclick="resetKnobs()">reset to calm defaults</button></div>
+          <span></span>
+        </div>
       </div>
       <div style="display:flex; gap:10px; align-items:center; margin-top:12px">
         <button onclick="saveConfig()">Save</button>
@@ -383,18 +418,109 @@
 
 <script>
 const TOKEN = "__STACKDECK_TOKEN__"; // injected by the daemon when serving this page
-/* themes: ?theme=playful | ?theme=austere (URL wins), else the saved choice */
-function setTheme(t) {
-  t ? localStorage.setItem("stackdeck.theme", t) : localStorage.removeItem("stackdeck.theme");
-  if (t) document.documentElement.dataset.theme = t;
-  else delete document.documentElement.dataset.theme;
-  document.querySelectorAll("[data-tbtn]").forEach(b => b.setAttribute("aria-pressed", b.dataset.tbtn === t));
+/* ---------- themes ----------
+   Presets: "" (calm), playful, austere. "custom" derives every token from a
+   few knobs (works light or dark). Persisted in config.json via /api/config;
+   localStorage is only a flash-free cache. ?theme= in the URL wins. */
+const THEME_KNOB_DEFAULTS = { hue: 75, tint: 0.01, bgL: 0.145, accentHue: 68, accentC: 0.115, radius: 7, font: "sans" };
+let themeKnobs = { ...THEME_KNOB_DEFAULTS };
+let themeName = "", themeLocked = false;
+
+function applyTokens(k) {
+  const dark = k.bgL < 0.5;
+  const st = document.documentElement.style;
+  const o = (l, c, h, a) => `oklch(${l.toFixed(3)} ${Math.max(0, c).toFixed(3)} ${h}${a ? " / " + a : ""})`;
+  const n = k.tint, h = k.hue;
+  st.setProperty("--bg", o(k.bgL, n, h));
+  if (dark) {
+    st.setProperty("--surface", o(k.bgL + 0.035, n, h));
+    st.setProperty("--surface-2", o(k.bgL + 0.07, n + 0.002, h));
+    st.setProperty("--border", o(k.bgL + 0.125, n + 0.004, h));
+    st.setProperty("--hairline", o(k.bgL + 0.085, n + 0.002, h));
+    st.setProperty("--text", o(0.93, Math.min(n, 0.01), h + 10));
+    st.setProperty("--dim", o(0.70, n + 0.004, h + 5));
+    st.setProperty("--faint", o(0.60, n + 0.002, h + 5));
+    st.setProperty("--border-strong", o(0.52, n + 0.002, h));
+    st.setProperty("--accent", o(0.78, k.accentC, k.accentHue));
+    st.setProperty("--accent-dim", o(0.78, k.accentC, k.accentHue, ".14"));
+    st.setProperty("--green", o(0.74, 0.145, 152));
+    st.setProperty("--green-dim", o(0.74, 0.145, 152, ".13"));
+    st.setProperty("--red", o(0.66, 0.17, 26));
+    st.setProperty("--red-dim", o(0.66, 0.17, 26, ".13"));
+  } else {
+    st.setProperty("--surface", o(Math.min(0.99, k.bgL + 0.015), n, h));
+    st.setProperty("--surface-2", o(k.bgL - 0.05, n + 0.002, h));
+    st.setProperty("--border", o(k.bgL - 0.16, n + 0.004, h));
+    st.setProperty("--hairline", o(k.bgL - 0.08, n + 0.002, h));
+    st.setProperty("--text", o(0.25, Math.min(n, 0.01), h + 10));
+    st.setProperty("--dim", o(0.47, n + 0.004, h + 5));
+    st.setProperty("--faint", o(0.55, n + 0.002, h + 5));
+    st.setProperty("--border-strong", o(0.62, n + 0.002, h));
+    st.setProperty("--accent", o(0.53, Math.max(k.accentC, 0.05), k.accentHue));
+    st.setProperty("--accent-dim", o(0.53, Math.max(k.accentC, 0.05), k.accentHue, ".14"));
+    st.setProperty("--green", o(0.50, 0.13, 152));
+    st.setProperty("--green-dim", o(0.50, 0.13, 152, ".12"));
+    st.setProperty("--red", o(0.53, 0.17, 26));
+    st.setProperty("--red-dim", o(0.53, 0.17, 26, ".12"));
+  }
+  st.setProperty("--r", Math.round(k.radius) + "px");
+  st.setProperty("--r-sm", Math.max(2, Math.round(k.radius * 0.7)) + "px");
+  st.setProperty("--r-lg", Math.round(k.radius * 1.45) + "px");
+  st.colorScheme = dark ? "dark" : "light";
+  document.body.style.fontFamily = k.font === "mono" ? "var(--mono)" : "";
 }
-const THEME = new URLSearchParams(location.search).get("theme") ?? localStorage.getItem("stackdeck.theme") ?? "";
-if (/^[a-z]*$/.test(THEME)) {
-  if (THEME) document.documentElement.dataset.theme = THEME;
-  queueMicrotask(() =>
-    document.querySelectorAll("[data-tbtn]").forEach(b => b.setAttribute("aria-pressed", b.dataset.tbtn === THEME)));
+function clearTokens() {
+  const st = document.documentElement.style;
+  [...st].filter(p => p.startsWith("--")).forEach(p => st.removeProperty(p));
+  st.removeProperty("color-scheme");
+  if (document.body) document.body.style.fontFamily = "";
+}
+function markPressed(t) {
+  document.querySelectorAll("[data-tbtn]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.tbtn === t)));
+}
+function syncEditor() {
+  for (const k of ["hue", "tint", "bgL", "accentHue", "accentC", "radius"]) {
+    const el = document.getElementById("tk-" + k);
+    if (el) el.value = themeKnobs[k];
+    const v = document.getElementById("tkv-" + k);
+    if (v) v.textContent = themeKnobs[k];
+  }
+  const f = document.getElementById("tk-font");
+  if (f) f.value = themeKnobs.font;
+}
+function applyTheme(t, save) {
+  themeName = t;
+  if (t === "custom") { delete document.documentElement.dataset.theme; applyTokens(themeKnobs); }
+  else {
+    clearTokens();
+    if (t) document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+  }
+  markPressed(t);
+  const ed = document.getElementById("theme-editor");
+  if (ed) ed.style.display = t === "custom" ? "" : "none";
+  try { localStorage.setItem("stackdeck.themeCache", JSON.stringify({ t, k: themeKnobs })); } catch {}
+  if (save) {
+    clearTimeout(applyTheme.t);
+    applyTheme.t = setTimeout(() =>
+      api("/api/config", { theme: t, themeTokens: themeKnobs }).catch(e => toast(e.message, true)), 300);
+  }
+}
+function knob(k, v) {
+  themeKnobs[k] = k === "font" ? v : Number(v);
+  const disp = document.getElementById("tkv-" + k);
+  if (disp) disp.textContent = v;
+  applyTheme("custom", true);
+}
+function resetKnobs() { themeKnobs = { ...THEME_KNOB_DEFAULTS }; syncEditor(); applyTheme("custom", true); }
+{
+  // flash-free boot: cached theme first, server truth follows via /api/meta
+  try {
+    const c = JSON.parse(localStorage.getItem("stackdeck.themeCache") || "null");
+    if (c) { themeKnobs = { ...THEME_KNOB_DEFAULTS, ...(c.k || {}) }; applyTheme(c.t || "", false); }
+  } catch {}
+  const u = new URLSearchParams(location.search).get("theme");
+  if (/^[a-z]+$/.test(u || "")) { themeLocked = true; applyTheme(u === "calm" ? "" : u, false); }
 }
 const $svc = document.getElementById("services");
 const $proj = document.getElementById("projects");
@@ -1296,6 +1422,11 @@ async function loadMeta() {
   try {
     const m = await api("/api/meta");
     meta = m;
+    if (!themeLocked && m.theme !== undefined) {
+      themeKnobs = { ...THEME_KNOB_DEFAULTS, ...(m.themeTokens || {}) };
+      syncEditor();
+      applyTheme(m.theme || "", false);
+    }
     if (m.categoryOrder && m.categoryOrder.length) CAT_ORDER = [...m.categoryOrder, "Uncategorized"];
     document.getElementById("metaPaths").textContent = `v${m.version}`;
     document.getElementById("metaPaths").title = `config: ${shortP(m.configPath)} · logs: ${shortP(m.logDir)}`;
