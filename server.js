@@ -339,8 +339,15 @@ function gitBranchFast(dir) {
 function inferCommand(dir) {
   const has = (f) => fs.existsSync(path.join(dir, f));
   const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
-  // Tolerant JSON: one malformed manifest must not abort the remaining detectors.
-  const jread = (f) => { try { return JSON.parse(read(f).replace(/\/\/[^\n]*/g, "")) || {}; } catch { return {}; } };
+  // Tolerant JSON: one malformed manifest must not abort the remaining
+  // detectors. Parse as-is FIRST — comment-stripping breaks every URL
+  // ("https://…") in valid JSON — and only fall back to stripping for
+  // jsonc-style files.
+  const jread = (f) => {
+    const raw = read(f);
+    try { return JSON.parse(raw) || {}; } catch {}
+    try { return JSON.parse(raw.replace(/^\s*\/\/[^\n]*/gm, "")) || {}; } catch { return {}; }
+  };
   const DEV_TARGETS = ["dev", "start", "run", "serve", "up"];
   try {
     /* -- author intent ------------------------------------------------ */
