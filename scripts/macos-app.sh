@@ -33,7 +33,9 @@ NODE="$(${SHELL:-/bin/zsh} -lc 'command -v node' 2>/dev/null || true)"
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
 PORT="${STACKDECK_PORT:-8899}"
 if ! lsof -tnP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
-  nohup "$NODE" "$RES/server.js" >/dev/null 2>&1 &
+  LOGDIR="${STACKDECK_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/stackdeck}/logs"
+  mkdir -p "$LOGDIR"
+  nohup "$NODE" "$RES/server.js" >> "$LOGDIR/daemon.log" 2>&1 &
   for _ in $(seq 1 20); do
     lsof -tnP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1 && break
     sleep 0.25

@@ -2,7 +2,7 @@
 /**
  * Stackdeck daemon — your projects folder, as a control panel.
  *
- * Zero dependencies (Node >= 18 builtins only). Binds to 127.0.0.1.
+ * Zero dependencies (Node >= 18.13 builtins only). Binds to 127.0.0.1.
  *
  *   node server.js            run in foreground
  *   stackdeck                  (CLI) start daemon + open the board
@@ -878,7 +878,10 @@ function startWorktree(s, branch) {
       git(mainDir, "worktree", "prune");
       r = git(mainDir, "worktree", "add", wtDir, branch);
     }
-    if (!r.ok) return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
+    if (!r.ok) {
+      try { fs.rmdirSync(path.dirname(wtDir)); } catch {} // only removes if empty
+      return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
+    }
   }
   const port = s.port ? freePortFrom(Number(s.port) + 1) : null;
   // .env is usually gitignored, so a fresh worktree has none — fall back to
@@ -1057,6 +1060,8 @@ const handle = async (req, res) => {
     const s = findSvc(name);
     if (!s) return json(res, 404, { error: "unknown service" });
     const safeBranch = String(branch || "").replace(/[^A-Za-z0-9._-]+/g, "-");
+    if (!safeBranch || safeBranch === "." || safeBranch === "..")
+      return json(res, 400, { error: "bad branch name" });
     const key = `${name}@${safeBranch}`;
     if (instances[key] && instLive(instances[key])) return json(res, 409, { error: "stop the instance first" });
     delete instances[key];
@@ -1361,10 +1366,32 @@ server.listen(PORT, "127.0.0.1", () =>
 const net = require("net");
 let PROXY_PORT = null;
 const proxyTargetPort = (hostHeader) => {
-  const m = /^([A-Za-z0-9._-]+)\.localhost(?::\d+)?$/.exec(hostHeader || "");
+  // Browsers lowercase hosts; curl and code may not — normalize.
+  const m = /^([a-z0-9._-]+)\.localhost(?::\d+)?$/.exec((hostHeader || "").toLowerCase());
   if (!m) return null;
-  const s = findSvc(m[1]);
-  return s && s.port ? s.port : null;
+  const label = m[1];
+  const svcByName = (n) => cfg.services.find((x) => x.name.toLowerCase() === n);
+  const instByKey = (k) => {
+    for (const [key, i] of Object.entries(instances))
+      if (key.toLowerCase() === k && instLive(i) && i.port) return i;
+    return null;
+  };
+  // 1. plain service:            orders-api.localhost
+  const svc = svcByName(label);
+  if (svc && svc.port) return svc.port;
+  // 2. worktree instance:        feature-x.orders-api.localhost  (branch.service)
+  const dot = label.lastIndexOf(".");
+  if (dot > 0) {
+    const i = instByKey(`${label.slice(dot + 1)}@${label.slice(0, dot)}`);
+    if (i) return i.port;
+  }
+  // 3. single-label form:        orders-api--feature-x.localhost
+  const dash = label.indexOf("--");
+  if (dash > 0) {
+    const i = instByKey(`${label.slice(0, dash)}@${label.slice(dash + 2)}`);
+    if (i) return i.port;
+  }
+  return null;
 };
 const proxy = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
   const port = proxyTargetPort(req.headers.host);

@@ -10,7 +10,7 @@ A browser dashboard for the services you run every day in local development.
 Stackdeck scans your projects folder, figures out how to run each repo, and
 gives you Start / Kill / restart buttons, live logs, and a **git branch
 dropdown** that checks out the branch before launching. Zero dependencies —
-one Node process, one HTML page, binds to 127.0.0.1.
+one Node process (>= 18.13), one HTML page, binds to 127.0.0.1.
 
 *Spiritual successor to [hotel](https://github.com/typicode/hotel)
 (unmaintained since 2019), with the git-awareness of
@@ -59,9 +59,11 @@ npm link                     # then: stackdeck | stackdeck status | stackdeck lo
 - **Port squatter eviction** — if another process holds a service's port,
   Start tells you the pid and offers to kill it and take the port.
 - ***.localhost domains** — a built-in reverse proxy maps
-  `<service>.localhost` → its port (WebSockets included). Browsers resolve
-  `*.localhost` natively: no /etc/hosts, no PAC files. Port 80 where the OS
-  allows unprivileged bind (macOS), `:8880` otherwise.
+  `<service>.localhost` → its port, and `<branch>.<service>.localhost` →
+  a running worktree instance (whose port you didn't pick — that's when
+  stable names matter most). WebSockets included. Browsers resolve
+  `*.localhost` natively: no /etc/hosts, no PAC files. Port 80 where
+  binding is permitted, `:8880` otherwise.
 - **Multi-process repos** — a Procfile, docker-compose services, or pnpm
   workspace packages turn one repo into a section of services with one click.
 - **Parallel branches (worktrees)** — pick a branch and hit ⧉: the service

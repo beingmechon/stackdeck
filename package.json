@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": { "node": ">=18.13" },
   "os": ["darwin", "linux"],
   "keywords": ["process-manager", "dev-server", "dashboard", "local-development", "git", "procfile", "hotel"],
   "repository": { "type": "git", "url": "https://github.com/beingmechon/stackdeck" }

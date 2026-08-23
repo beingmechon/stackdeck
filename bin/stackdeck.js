@@ -48,7 +48,14 @@ async function up() {
 
 async function ensureDaemon() {
   if (await up()) return;
-  const child = spawn(process.execPath, [SERVER], { detached: true, stdio: "ignore" });
+  // The daemon's own stderr (crash guards, request errors) goes to a log —
+  // safety nets that report to /dev/null are worse than no nets.
+  let out = "ignore";
+  try {
+    fs.mkdirSync(path.join(stateHome(), "logs"), { recursive: true, mode: 0o700 });
+    out = fs.openSync(path.join(stateHome(), "logs", "daemon.log"), "a");
+  } catch {}
+  const child = spawn(process.execPath, [SERVER], { detached: true, stdio: ["ignore", out, out] });
   child.unref();
   for (let i = 0; i < 40; i++) {
     if (await up()) return;

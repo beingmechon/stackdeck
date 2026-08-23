@@ -718,6 +718,9 @@ function instanceRow(i) {
       <span class="dot up"></span>
       <span class="svc-name" style="font-weight:500">⧉ ${esc(i.svc)} <span class="cmdline">@ ${esc(i.branch)}</span></span>
       <span class="badge dirty" title="parallel worktree instance">worktree</span>
+      ${meta && meta.proxyPort && i.port
+        ? `<a class="badge link" target="_blank" href="http://${esc(i.key.split("@")[1])}.${esc(i.svc)}.localhost${meta.proxyPort === 80 ? "" : ":" + meta.proxyPort}"
+             title="via the *.localhost proxy">${esc(i.key.split("@")[1])}.${esc(i.svc)}.localhost</a>` : ""}
       <span class="addr">:${i.port ?? "—"} · ${i.pid}</span>
       <span class="grow"></span>
       <span class="row-actions">
