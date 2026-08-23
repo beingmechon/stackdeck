@@ -20,14 +20,20 @@ neither has.*
 ## Quick start
 
 ```bash
-git clone https://github.com/beingmechon/stackdeck && cd stackdeck
-node bin/stackdeck.js         # starts the daemon, opens http://localhost:8899
+npx stackdeck                # starts the daemon, opens http://localhost:8899
 ```
 
-Or link it onto your PATH:
+Or install it onto your PATH:
 
 ```bash
-npm link                     # then: stackdeck | stackdeck status | stackdeck logs api
+npm install -g stackdeck     # then: stackdeck | stackdeck status | stackdeck logs api
+```
+
+Or run from source:
+
+```bash
+git clone https://github.com/beingmechon/stackdeck && cd stackdeck
+node bin/stackdeck.js
 ```
 
 ## What it does
