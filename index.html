@@ -23,6 +23,8 @@
     --red:       oklch(0.66 0.17 26);
     --red-dim:   oklch(0.66 0.17 26 / .13);
     --r-sm: 5px; --r: 7px; --r-lg: 10px;
+    --ease: cubic-bezier(0.25, 1, 0.5, 1); /* ease-out-quart */
+    --dur: .15s;
     --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
@@ -55,7 +57,7 @@
 
   .ledger { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
 
-  .row { border-top:1px solid var(--hairline); transition:background .15s ease-out; }
+  .row { border-top:1px solid var(--hairline); transition:background var(--dur) var(--ease); }
   .row:first-child { border-top:none; }
   .row:hover { background:var(--surface-2); }
   .row-main { display:flex; align-items:center; gap:12px; padding:11px 16px; }
@@ -101,20 +103,25 @@
   /* fixed-width slots keep every row's controls in the same columns */
   .branch-slot { width:clamp(150px, 16vw, 220px); flex:none; display:flex; justify-content:flex-end; }
   .branch-slot select { width:100%; }
-  .branch-slot select.dirty { border-color:var(--accent); }
+  /* dirty = amber border plus a dot glyph, so the state isn't color-alone */
+  .branch-slot select.dirty {
+    border-color:var(--accent);
+    background-image:radial-gradient(circle, var(--accent) 2px, transparent 2.6px);
+    background-repeat:no-repeat; background-position:right 24px center;
+  }
   .row-actions { display:flex; gap:2px; flex:none; align-items:center; }
-  .row-actions .primary { width:74px; text-align:center; }
+  .row-actions .primary { min-width:74px; text-align:center; }
   .addr { width:110px; flex:none; text-align:right; }
 
   /* Secondary actions stay quiet until the row (or section head) is engaged —
      the board reads as status, not as a wall of buttons. */
   .row-actions .ghost, .group-head .actions button, .row .add {
-    opacity:0; transition:opacity .15s ease-out;
+    opacity:0; transition:opacity var(--dur) var(--ease);
   }
   .row:hover .row-actions .ghost, .row:focus-within .row-actions .ghost,
   .group-head:hover .actions button, .group-head:focus-within .actions button,
   .row:hover .add, .row:focus-within .add { opacity:1; }
-  .cat-sel { opacity:0; transition:opacity .15s ease-out; max-width:150px; font-size:11px; padding:2px 6px; }
+  .cat-sel { opacity:0; transition:opacity var(--dur) var(--ease); max-width:150px; font-size:11px; padding:2px 6px; }
   .row:hover .cat-sel, .row:focus-within .cat-sel { opacity:1; }
 
   /* touch devices have no hover — keep actions visible and give them room */
@@ -144,7 +151,7 @@
     font:600 13px var(--sans); color:var(--text);
     background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r);
     padding:5px 13px; cursor:pointer;
-    transition:border-color .15s ease-out, background .15s ease-out, color .15s ease-out;
+    transition:border-color var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
   }
   button:hover { border-color:var(--dim); }
   button:active { transform:translateY(0.5px); }
@@ -159,7 +166,10 @@
   button.add:hover { background:var(--accent); color:oklch(0.16 0.02 68); }
 
   .drawer { display:none; padding:4px 16px 14px 36px; }
-  .drawer.open { display:block; }
+  @keyframes drawerIn { from { opacity:0; transform:translateY(-3px); } }
+  .drawer.open { display:block; animation:drawerIn .18s var(--ease); }
+  @keyframes badgeIn { from { opacity:0; transform:scale(.92); } }
+  .badge.crash, .badge.dirty { animation:badgeIn .22s var(--ease); }
   .fields { display:grid; grid-template-columns:64px 1fr; gap:7px 12px; align-items:center; max-width:720px; }
   .fields label { color:var(--faint); font-size:12px; text-align:right; }
 
@@ -201,7 +211,7 @@
   button.title:hover { color:var(--text); }
   button.chev-btn { background:none; border:none; padding:2px 6px; cursor:pointer; color:var(--faint); }
   button.chev-btn:hover { color:var(--dim); }
-  .chev { display:inline-block; transition:transform .15s ease-out; font-size:10px; color:var(--faint); }
+  .chev { display:inline-block; transition:transform var(--dur) var(--ease); font-size:10px; color:var(--faint); }
   .chev.closed { transform:rotate(-90deg); }
 
   /* settings: folder tree */
@@ -248,7 +258,7 @@
     position:fixed; bottom:22px; left:50%; transform:translate(-50%, 8px);
     background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg);
     padding:10px 18px; max-width:70%; font-size:13px;
-    opacity:0; pointer-events:none; transition:opacity .2s ease-out, transform .2s ease-out;
+    opacity:0; pointer-events:none; transition:opacity .2s var(--ease), transform .2s var(--ease);
   }
   .toast.show { opacity:1; transform:translate(-50%, 0); }
   .toast.err { border-color:var(--red); color:oklch(0.85 0.06 26); }
@@ -271,12 +281,16 @@
     --red:       oklch(0.68 0.19 20);
     --red-dim:   oklch(0.68 0.19 20 / .15);
     --r-sm: 999px; --r: 11px; --r-lg: 16px;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint: a touch livelier */
+    --dur: .2s;
   }
   [data-theme="playful"] .dot { width:10px; height:10px; }
   [data-theme="playful"] .dot.up { box-shadow:0 0 0 4px var(--green-dim), 0 0 12px oklch(0.78 0.16 155 / .35); }
   [data-theme="playful"] .badge { padding:2px 9px; }
   [data-theme="playful"] button:hover { transform:translateY(-1px); }
   [data-theme="playful"] button:active { transform:translateY(0.5px); }
+  [data-theme="playful"] .section-label { color:var(--accent); }
+  [data-theme="playful"] .drawer.open { animation-duration:.24s; }
 
   /* ---- candidate theme C: austere (?theme=austere — under evaluation) ---- */
   [data-theme="austere"] {
@@ -296,6 +310,7 @@
     --red:       oklch(0.70 0.11 25);
     --red-dim:   oklch(0.70 0.11 25 / .10);
     --r-sm: 2px; --r: 3px; --r-lg: 4px;
+    --dur: .08s; /* austere: near-instant state changes */
   }
   [data-theme="austere"] body { font-family:var(--mono); }
   [data-theme="austere"] .dot.up { box-shadow:none; }
@@ -303,6 +318,11 @@
   [data-theme="austere"] button.start { border-color:oklch(0.78 0.09 150 / .4); background:transparent; }
   [data-theme="austere"] button.kill { border-color:oklch(0.70 0.11 25 / .4); background:transparent; }
   [data-theme="austere"] button.add { border-color:oklch(0.85 0.02 85 / .4); background:transparent; }
+  [data-theme="austere"] .section-label { letter-spacing:.18em; }
+  [data-theme="austere"] .drawer.open, [data-theme="austere"] .badge.crash, [data-theme="austere"] .badge.dirty { animation:none; }
+
+  /* theme picker (settings) */
+  button[data-tbtn][aria-pressed="true"] { border-color:var(--accent); color:var(--text); }
 </style>
 </head>
 <body>
@@ -321,8 +341,14 @@
       <div id="cfg-roots-list"></div>
       <div id="cfg-browser" style="display:none"></div>
       <button class="ghost" onclick="browseFolders()">+ add folder…</button>
-      <div class="cfg-label" style="margin-top:16px">Project categories <span class="count">drag to change the order they appear on the board</span></div>
+      <div class="cfg-label" style="margin-top:16px">Project categories <span class="count">drag or use the arrows to change board order</span></div>
       <div id="cfg-cats" class="cat-list"></div>
+      <div class="cfg-label" style="margin-top:16px">Theme <span class="count">applies immediately, saved in this browser</span></div>
+      <div style="display:flex; gap:6px">
+        <button class="ghost" data-tbtn="" onclick="setTheme('')">calm</button>
+        <button class="ghost" data-tbtn="playful" onclick="setTheme('playful')">playful</button>
+        <button class="ghost" data-tbtn="austere" onclick="setTheme('austere')">austere</button>
+      </div>
       <div style="display:flex; gap:10px; align-items:center; margin-top:12px">
         <button onclick="saveConfig()">Save</button>
         <span class="cmdline" id="cfg-path"></span>
@@ -357,9 +383,19 @@
 
 <script>
 const TOKEN = "__STACKDECK_TOKEN__"; // injected by the daemon when serving this page
-/* candidate theme switch, evaluation only: ?theme=playful | ?theme=austere */
-const THEME = new URLSearchParams(location.search).get("theme");
-if (/^[a-z]+$/.test(THEME || "")) document.documentElement.dataset.theme = THEME;
+/* themes: ?theme=playful | ?theme=austere (URL wins), else the saved choice */
+function setTheme(t) {
+  t ? localStorage.setItem("stackdeck.theme", t) : localStorage.removeItem("stackdeck.theme");
+  if (t) document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  document.querySelectorAll("[data-tbtn]").forEach(b => b.setAttribute("aria-pressed", b.dataset.tbtn === t));
+}
+const THEME = new URLSearchParams(location.search).get("theme") ?? localStorage.getItem("stackdeck.theme") ?? "";
+if (/^[a-z]*$/.test(THEME)) {
+  if (THEME) document.documentElement.dataset.theme = THEME;
+  queueMicrotask(() =>
+    document.querySelectorAll("[data-tbtn]").forEach(b => b.setAttribute("aria-pressed", b.dataset.tbtn === THEME)));
+}
 const $svc = document.getElementById("services");
 const $proj = document.getElementById("projects");
 const $toast = document.getElementById("toast");
@@ -491,8 +527,8 @@ function svcRow(s) {
       ${branch}
       <span class="row-actions">
         ${s.running
-          ? `<button class="kill primary" onclick="stop('${esc(s.name)}')">Kill</button>`
-          : `<button class="start primary" onclick="start('${esc(s.name)}')">Start</button>`}
+          ? `<button class="kill primary" onclick="stop('${esc(s.name)}', this)">Kill</button>`
+          : `<button class="start primary" onclick="start('${esc(s.name)}', false, this)">Start</button>`}
         <button class="ghost" ${s.running ? "" : "disabled"} title="stop, then start again on the same branch"
                 onclick="restart('${s.name}')">restart</button>
         <button class="ghost" aria-expanded="${logOpen.has(s.name)}" aria-controls="logwrap-${s.name}"
@@ -869,8 +905,9 @@ async function stopInstance(key) {
   setTimeout(() => loadServices(true), 400);
 }
 
-async function start(name, force) {
+async function start(name, force, btn) {
   const sel = document.getElementById("br-" + name);
+  if (btn) { btn.disabled = true; btn.textContent = "starting…"; }
   try {
     const s = services.find(x => x.name === name);
     // when stopped, the dropdown choice is a checkout request; when it was
@@ -881,18 +918,20 @@ async function start(name, force) {
   } catch (e) {
     const busy = e.message.match(/port (\d+) is busy \(pid (\d+)/);
     if (busy && !force && confirm(`Port ${busy[1]} is used by another process (pid ${busy[2]}).\nKill it and start ${name}?`))
-      return start(name, true);
+      return start(name, true, btn);
     toast(e.message, true);
+    if (btn) { btn.disabled = false; btn.textContent = "Start"; }
   }
   loadServices(true);
 }
-async function stop(name) {
+async function stop(name, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "killing…"; }
   try {
     const r = await api("/api/stop", { name });
     toast(r.note || name + " killed", !!r.note);
   }
-  catch (e) { toast(e.message, true); }
-  setTimeout(loadServices, 400);
+  catch (e) { toast(e.message, true); if (btn) { btn.disabled = false; btn.textContent = "Kill"; } }
+  setTimeout(() => loadServices(true), 400);
 }
 async function restart(name) {
   toast(name + " restarting…");
