@@ -357,7 +357,7 @@
   .swatch .sw i:first-child { left:7px; }
   .swatch .sw i:last-child { left:19px; }
 
-  /* theme editor knobs */
+  /* theme editor knobs: gradient tracks preview what each slider does */
   .knobs {
     display:grid; grid-template-columns:92px minmax(120px, 300px) 54px;
     gap:9px 14px; align-items:center;
@@ -365,6 +365,25 @@
   .knobs label { color:var(--dim); font-size:12px; text-align:right; }
   .knobs .knob-val { color:var(--faint); font-size:11px; font-family:var(--mono); }
   .knobs select { max-width:120px; }
+  .knobs input[type="range"] { -webkit-appearance:none; appearance:none; height:20px; background:transparent; margin:0; }
+  .knobs input[type="range"]::-webkit-slider-runnable-track {
+    height:8px; border-radius:4px; border:1px solid var(--hairline);
+    background:var(--track, var(--surface-2));
+  }
+  .knobs input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance:none; width:16px; height:16px; border-radius:50%; margin-top:-5px;
+    background:var(--text); border:3px solid var(--bg); box-shadow:0 0 0 1px var(--border-strong);
+  }
+  .knobs input[type="range"]::-moz-range-track {
+    height:8px; border-radius:4px; border:1px solid var(--hairline);
+    background:var(--track, var(--surface-2));
+  }
+  .knobs input[type="range"]::-moz-range-thumb {
+    width:12px; height:12px; border-radius:50%;
+    background:var(--text); border:3px solid var(--bg); box-shadow:0 0 0 1px var(--border-strong);
+  }
+  .sw.wheel { background:conic-gradient(oklch(0.7 0.15 20), oklch(0.8 0.15 90), oklch(0.75 0.15 150), oklch(0.7 0.15 230), oklch(0.7 0.15 310), oklch(0.7 0.15 20)); }
+  .cfg-status { color:var(--green); font-size:12px; margin-left:auto; }
 </style>
 </head>
 <body>
@@ -400,6 +419,11 @@
       </div>
       <div class="cfg-body">
         <div id="cfg-cats" class="cat-list"></div>
+        <div style="display:flex; gap:6px; margin-top:10px">
+          <input id="new-cat" placeholder="new category…" aria-label="new category name"
+                 onkeydown="if (event.key === 'Enter') addCategoryInline()">
+          <button class="ghost" onclick="addCategoryInline()">add</button>
+        </div>
       </div>
     </div>
     <div class="cfg-section">
@@ -416,21 +440,25 @@
           <button class="swatch" data-tbtn="austere" onclick="applyTheme('austere', true)">
             <span class="sw" style="background:oklch(0.13 0.003 80)" aria-hidden="true"><i style="background:oklch(0.85 0.02 85)"></i><i style="background:oklch(0.78 0.09 150)"></i></span>austere</button>
           <button class="swatch" data-tbtn="custom" onclick="applyTheme('custom', true)">
-            <span class="sw" style="background:conic-gradient(oklch(0.7 0.15 20), oklch(0.8 0.15 90), oklch(0.75 0.15 150), oklch(0.7 0.15 230), oklch(0.7 0.15 310), oklch(0.7 0.15 20))" aria-hidden="true"></span>custom…</button>
+            <span class="sw wheel" id="sw-custom" aria-hidden="true"></span>custom…</button>
         </div>
         <div id="theme-editor" style="display:none; margin-top:14px">
           <div class="knobs">
             <label for="tk-hue">base hue</label>
-            <input type="range" id="tk-hue" min="0" max="360" step="1" value="75" oninput="knob('hue', this.value)">
+            <input type="range" id="tk-hue" min="0" max="360" step="1" value="75" oninput="knob('hue', this.value)"
+                   style="--track:linear-gradient(90deg, oklch(0.55 0.06 0), oklch(0.55 0.06 60), oklch(0.55 0.06 120), oklch(0.55 0.06 180), oklch(0.55 0.06 240), oklch(0.55 0.06 300), oklch(0.55 0.06 360))">
             <span class="knob-val" id="tkv-hue">75</span>
             <label for="tk-tint">warmth</label>
-            <input type="range" id="tk-tint" min="0" max="0.05" step="0.002" value="0.01" oninput="knob('tint', this.value)">
+            <input type="range" id="tk-tint" min="0" max="0.05" step="0.002" value="0.01" oninput="knob('tint', this.value)"
+                   style="--track:linear-gradient(90deg, oklch(0.45 0 0), oklch(0.5 0.08 75))">
             <span class="knob-val" id="tkv-tint">0.01</span>
             <label for="tk-bgL">dark ↔ light</label>
-            <input type="range" id="tk-bgL" min="0.08" max="0.98" step="0.005" value="0.145" oninput="knob('bgL', this.value)">
+            <input type="range" id="tk-bgL" min="0.08" max="0.98" step="0.005" value="0.145" oninput="knob('bgL', this.value)"
+                   style="--track:linear-gradient(90deg, oklch(0.10 0.01 75), oklch(0.97 0.01 75))">
             <span class="knob-val" id="tkv-bgL">0.145</span>
             <label for="tk-accentHue">accent hue</label>
-            <input type="range" id="tk-accentHue" min="0" max="360" step="1" value="68" oninput="knob('accentHue', this.value)">
+            <input type="range" id="tk-accentHue" min="0" max="360" step="1" value="68" oninput="knob('accentHue', this.value)"
+                   style="--track:linear-gradient(90deg, oklch(0.6 0.14 0), oklch(0.6 0.14 60), oklch(0.6 0.14 120), oklch(0.6 0.14 180), oklch(0.6 0.14 240), oklch(0.6 0.14 300), oklch(0.6 0.14 360))">
             <span class="knob-val" id="tkv-accentHue">68</span>
             <label for="tk-accentC">accent pop</label>
             <input type="range" id="tk-accentC" min="0" max="0.25" step="0.005" value="0.115" oninput="knob('accentC', this.value)">
@@ -450,8 +478,8 @@
       </div>
     </div>
     <div class="cfg-foot">
-      <button onclick="saveConfig()">Save folders &amp; categories</button>
-      <span class="cmdline" id="cfg-path"></span>
+      <span class="cmdline">changes apply immediately and save to <span id="cfg-path"></span></span>
+      <span class="cfg-status" id="cfg-status" role="status" aria-live="polite"></span>
     </div>
   </div>
   <div class="section-label"><span role="heading" aria-level="2">Services</span> <span class="count" id="svc-count"></span>
@@ -551,6 +579,7 @@ function syncEditor() {
   }
   const f = document.getElementById("tk-font");
   if (f) f.value = themeKnobs.font;
+  updateAccentTrack();
 }
 function applyTheme(t, save) {
   themeName = t;
@@ -563,6 +592,15 @@ function applyTheme(t, save) {
   markPressed(t);
   const ed = document.getElementById("theme-editor");
   if (ed) ed.style.display = t === "custom" ? "" : "none";
+  const chip = document.getElementById("sw-custom");
+  if (chip) {
+    if (t === "custom") {
+      const dk = themeKnobs.bgL < 0.5;
+      chip.style.background = `oklch(${themeKnobs.bgL} ${themeKnobs.tint} ${themeKnobs.hue})`;
+      chip.innerHTML = `<i style="background:oklch(${dk ? 0.78 : 0.53} ${themeKnobs.accentC} ${themeKnobs.accentHue})"></i>` +
+                       `<i style="background:oklch(${dk ? 0.74 : 0.50} 0.14 152)"></i>`;
+    } else { chip.style.background = ""; chip.innerHTML = ""; }
+  }
   try { localStorage.setItem("stackdeck.themeCache", JSON.stringify({ t, k: themeKnobs })); } catch {}
   if (save) {
     clearTimeout(applyTheme.t);
@@ -570,10 +608,16 @@ function applyTheme(t, save) {
       api("/api/config", { theme: t, themeTokens: themeKnobs }).catch(e => toast(e.message, true)), 300);
   }
 }
+function updateAccentTrack() {
+  const el = document.getElementById("tk-accentC");
+  if (el) el.style.setProperty("--track",
+    `linear-gradient(90deg, oklch(0.6 0 ${themeKnobs.accentHue}), oklch(0.6 0.25 ${themeKnobs.accentHue}))`);
+}
 function knob(k, v) {
   themeKnobs[k] = k === "font" ? v : Number(v);
   const disp = document.getElementById("tkv-" + k);
   if (disp) disp.textContent = v;
+  if (k === "accentHue") updateAccentTrack();
   applyTheme("custom", true);
 }
 function resetKnobs() { themeKnobs = { ...THEME_KNOB_DEFAULTS }; syncEditor(); applyTheme("custom", true); }
@@ -1350,10 +1394,14 @@ function toggleSettings() {
       ...(meta.categoryOrder || []).filter(c => existing.includes(c)),
       ...existing.filter(c => !(meta.categoryOrder || []).includes(c)).sort(),
     ];
-    document.getElementById("cfg-path").textContent = "saved to " + shortP(meta.configPath);
+    document.getElementById("cfg-path").textContent = shortP(meta.configPath);
     document.getElementById("cfg-browser").style.display = "none";
     renderRoots();
     renderCatList();
+  }
+  if (show) {
+    const h = document.querySelector("#settings .cfg-head [role=heading]");
+    if (h) { h.setAttribute("tabindex", "-1"); h.focus(); }
   }
 }
 
@@ -1381,6 +1429,7 @@ function moveCat(i, d) {
   [pending.cats[i], pending.cats[j]] = [pending.cats[j], pending.cats[i]];
   renderCatList();
   document.getElementById((d < 0 ? "catup-" : "catdn-") + j)?.focus();
+  scheduleCfgSave();
 }
 function dropCat(ev, to) {
   ev.preventDefault();
@@ -1389,6 +1438,7 @@ function dropCat(ev, to) {
   pending.cats.splice(to > dragCat ? to - 1 : to, 0, moved);
   dragCat = null;
   renderCatList();
+  scheduleCfgSave();
 }
 
 async function renderRoots() {
@@ -1428,10 +1478,12 @@ function toggleRootOpen(root) {
 function toggleExclude(full, included) {
   included ? pending.excludes.delete(full) : pending.excludes.add(full);
   renderRoots();
+  scheduleCfgSave();
 }
 function removeRoot(root) {
   pending.roots = pending.roots.filter(r => r !== root);
   renderRoots();
+  scheduleCfgSave();
 }
 
 /* folder browser for adding a root */
@@ -1463,22 +1515,50 @@ function pickRoot() {
   if (browsePath && !pending.roots.includes(browsePath)) {
     pending.roots.push(browsePath);
     pending.openRoots.add(browsePath);
+    scheduleCfgSave();
   }
   document.getElementById("cfg-browser").style.display = "none";
   renderRoots();
 }
 
-async function saveConfig() {
+/* settings auto-save: every control applies immediately; the footer shows
+   saving…/saved so the user is never left wondering (no explicit Save). */
+let cfgSaveT, cfgStatusT;
+function cfgStatus(msg, sticky) {
+  const el = document.getElementById("cfg-status");
+  if (!el) return;
+  el.textContent = msg;
+  clearTimeout(cfgStatusT);
+  if (msg && !sticky) cfgStatusT = setTimeout(() => (el.textContent = ""), 2000);
+}
+function scheduleCfgSave() {
+  cfgStatus("saving…", true);
+  clearTimeout(cfgSaveT);
+  cfgSaveT = setTimeout(async () => {
+    try {
+      await api("/api/config", {
+        projectRoots: pending.roots,
+        excludes: [...pending.excludes],
+        categoryOrder: pending.cats,
+      });
+      cfgStatus("saved ✓");
+      await loadMeta();
+      loadProjects(true);
+    } catch (e) { cfgStatus(""); toast(e.message, true); }
+  }, 500);
+}
+async function addCategoryInline() {
+  const el = document.getElementById("new-cat");
+  const name = el.value.trim();
+  if (!name) return;
   try {
-    await api("/api/config", {
-      projectRoots: pending.roots,
-      excludes: [...pending.excludes],
-      categoryOrder: pending.cats,
-    });
-    toast("settings saved");
-    document.getElementById("settings").style.display = "none";
+    await api("/api/category", { name });
+    el.value = "";
+    if (!pending.cats.includes(name)) pending.cats.push(name);
+    renderCatList();
+    cfgStatus("saved ✓");
     await loadMeta();
-    await loadProjects(true);
+    loadProjects(true);
   } catch (e) { toast(e.message, true); }
 }
 async function load() { await Promise.all([loadServices(), loadProjects()]); }
