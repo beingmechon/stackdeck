@@ -17,6 +17,10 @@ one Node process (>= 18.13), one HTML page, binds to 127.0.0.1.
 [portree](https://github.com/fairy-pitta/portree) and the multi-project scope
 neither has.*
 
+## The 40-second tour
+
+<img src="docs/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree with its own port, then switching the whole board to a custom light theme from the settings editor" width="100%">
+
 ## Quick start
 
 ```bash
