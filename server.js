@@ -938,7 +938,9 @@ function startWorktree(s, branch) {
   child.on("exit", (code, sig) => { pushLog(key, `[stackdeck] exited (code=${code} signal=${sig})\n`); delete instances[key]; saveProcs(); });
   instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now() };
   saveProcs();
-  pushLog(key, `[stackdeck] worktree instance: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtDir}\n`);
+  // shorten $HOME in the banner — log panes end up in screenshots and screen shares
+  const wtShort = wtDir.startsWith(os.homedir()) ? "~" + wtDir.slice(os.homedir().length) : wtDir;
+  pushLog(key, `[stackdeck] worktree instance: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtShort}\n`);
   return { code: 200, ok: true, key, port, pid: child.pid };
 }
 

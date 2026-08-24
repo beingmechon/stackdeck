@@ -1343,7 +1343,7 @@ function renderInfra() {
         <span class="dot ${t.runningPid ? "up" : ""}"></span>
         <span class="svc-name" style="min-width:140px">${esc(t.title)}</span>
         <span class="addr">:${t.port}${t.runningPid ? " · " + t.runningPid : ""}</span>
-        <span class="grow cmdline"><b>${esc(t.command)}</b></span>
+        <span class="grow cmdline" title="${esc(t.command)}"><b>${esc(meta && meta.home ? t.command.split(meta.home).join("~") : t.command)}</b></span>
         ${t.configured
           ? '<span class="badge cfgd">configured</span>'
           : `<button class="add" onclick="configureInfra('${esc(t.name)}')">configure</button>`}
@@ -1577,6 +1577,7 @@ async function loadMeta() {
     document.getElementById("filter").placeholder =
       `filter ${m.projectRoots.map(shortP).join(", ")}…`;
     renderProjects();
+    renderInfra(); // re-render with meta.home so paths display as ~
   } catch {}
 }
 
