@@ -5,7 +5,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$HOME/Applications/Stackdeck.app"
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$REPO/server.js" "$REPO/index.html" "$APP/Contents/Resources/"
+cp "$REPO/server.js" "$REPO/index.html" "$REPO/package.json" "$APP/Contents/Resources/"
 [ -f "$REPO/scripts/Stackdeck.icns" ] && cp "$REPO/scripts/Stackdeck.icns" "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'

@@ -22,7 +22,11 @@ const path = require("path");
 const os = require("os");
 const { spawn, execFileSync } = require("child_process");
 
-const VERSION = "0.4.0";
+// Version comes from package.json so `npm version` is the single source of truth.
+const VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version; }
+  catch { return "unknown"; }
+})();
 const ROOT = __dirname;
 
 /* ---------- state directory & config ---------- */
