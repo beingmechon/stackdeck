@@ -452,7 +452,11 @@ function inferCommand(dir) {
 function detectProcs(dir) {
   const has = (f) => fs.existsSync(path.join(dir, f));
   const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
+  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { return null; } };
+  const app = [];   // the repo's own processes
+  const infra = []; // databases and brokers it declares
   try {
+    // A Procfile is an explicit, authoritative process list — it wins outright.
     for (const pf of ["Procfile.dev", "Procfile"]) if (has(pf)) {
       const procs = [];
       for (const line of read(pf).split("\n")) {
@@ -461,39 +465,72 @@ function detectProcs(dir) {
       }
       if (procs.length > 1) return procs;
     }
-    if (has("pnpm-workspace.yaml")) {
-      const procs = [];
-      const globs = [...read("pnpm-workspace.yaml").matchAll(/^\s*-\s*['"]?([^'"\s#]+)/gm)].map((m) => m[1]);
-      for (const g of globs) {
-        const bases = g.endsWith("/*") ? (() => {
-          try {
-            return fs.readdirSync(path.join(dir, g.slice(0, -2)), { withFileTypes: true })
-              .filter((e) => e.isDirectory()).map((e) => path.join(g.slice(0, -2), e.name));
-          } catch { return []; }
-        })() : [g];
-        for (const rel of bases) {
-          try {
-            const pkg = JSON.parse(fs.readFileSync(path.join(dir, rel, "package.json"), "utf8"));
-            const script = pkg.scripts && (pkg.scripts.dev ? "dev" : pkg.scripts.start ? "start" : null);
-            if (script && pkg.name) procs.push({ name: path.basename(rel), command: `pnpm -F ${pkg.name} ${script}`, dir });
-          } catch {}
+
+    const pkg = has("package.json") ? readJson("package.json") : null;
+    const runner =
+      has("bun.lockb") || has("bun.lock") ? "bun" :
+      has("pnpm-lock.yaml") || has("pnpm-workspace.yaml") ? "pnpm" :
+      has("yarn.lock") ? "yarn" : "npm";
+
+    // Workspace packages (pnpm-workspace.yaml, or the workspaces field npm and
+    // yarn use): each package that can run on its own is a process.
+    const globs = has("pnpm-workspace.yaml")
+      ? [...read("pnpm-workspace.yaml").matchAll(/^\s*-\s*['"]?([^'"\s#]+)/gm)].map((m) => m[1])
+      : (pkg && Array.isArray(pkg.workspaces) ? pkg.workspaces
+         : pkg && pkg.workspaces && Array.isArray(pkg.workspaces.packages) ? pkg.workspaces.packages : []);
+    for (const g of globs) {
+      const bases = g.endsWith("/*") ? (() => {
+        try {
+          return fs.readdirSync(path.join(dir, g.slice(0, -2)), { withFileTypes: true })
+            .filter((e) => e.isDirectory()).map((e) => path.join(g.slice(0, -2), e.name));
+        } catch { return []; }
+      })() : [g];
+      for (const rel of bases) {
+        const wp = readJson(path.join(rel, "package.json"));
+        const script = wp && wp.scripts && (wp.scripts.dev ? "dev" : wp.scripts.start ? "start" : null);
+        if (!script || !wp.name) continue;
+        const cmd =
+          runner === "pnpm" ? `pnpm -F ${wp.name} ${script}` :
+          runner === "yarn" ? `yarn workspace ${wp.name} ${script}` :
+          runner === "bun" ? `bun run --filter ${wp.name} ${script}` :
+          `npm run ${script} -w ${wp.name}`;
+        app.push({ name: path.basename(rel), command: cmd, dir });
+      }
+    }
+
+    // Monorepos without a workspaces field are common: several apps are driven
+    // by a family of root scripts (dev, dev:admin, dev:worker) that each run one
+    // of them. Treat the family as the process list.
+    if (!app.length && pkg && pkg.scripts) {
+      const fam = Object.keys(pkg.scripts).filter((k) => /^(dev|start)(:[A-Za-z0-9_-]+)?$/.test(k));
+      const base = fam.filter((k) => !k.includes(":"));
+      if (fam.length > 1 && fam.length - base.length >= 1) {
+        for (const k of fam) {
+          // "dev" alongside "dev:admin" is usually the primary app, not an
+          // umbrella that starts everything; skip it if it fans out to the rest.
+          const v = String(pkg.scripts[k]);
+          if (!k.includes(":") && /concurrently|npm-run-all|turbo run|&\s*$|&&.*dev:/.test(v)) continue;
+          app.push({ name: k.includes(":") ? k.split(":")[1] : "app", command: `${runner} run ${k}`, dir });
         }
       }
-      if (procs.length > 1) return procs;
     }
+
     for (const cf of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) if (has(cf)) {
-      const procs = [];
       let inServices = false;
       for (const line of read(cf).split("\n")) {
         if (/^services:\s*$/.test(line)) { inServices = true; continue; }
         if (inServices && /^[A-Za-z#]/.test(line)) inServices = false; // dedent = section over
         const m = inServices && line.match(/^ {2}([A-Za-z0-9._-]+):\s*$/);
-        if (m) procs.push({ name: m[1], command: `docker compose up ${m[1]}`, dir });
+        if (m) infra.push({ name: m[1], command: `docker compose up ${m[1]}`, dir });
       }
-      if (procs.length > 1) return procs;
+      if (infra.length) break;
     }
   } catch {}
-  return null;
+  // Compose usually covers the databases while the app runs on the host, so
+  // both halves belong on the board. Compose-only names lose to app names.
+  const seen = new Set(app.map((p) => p.name));
+  const all = [...app, ...infra.filter((p) => !seen.has(p.name))];
+  return all.length > 1 ? all : null;
 }
 
 function scanProjects() {
