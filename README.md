@@ -176,6 +176,11 @@ lines, quotes and `#` comments handled, no interpolation or multiline values.
 - The HTTP server accepts headers up to 256KB, because browsers hoard
   localhost cookies across every dev app you've ever run, and Node's 16KB
   default silently breaks localhost apps (431s / dropped connections).
+  **Your services have the same problem** — a service that logs "Ready" and
+  still shows "this page isn't working" in the browser is usually this, and
+  `curl` will succeed while the browser fails (curl sends no cookies). For a
+  Node service, set `{"NODE_OPTIONS": "--max-http-header-size=131072"}` in
+  its env; for anything else, clear cookies for localhost.
 - Kill stops the whole process group; stragglers get SIGKILL after 5s.
 
 ## macOS app (optional)
