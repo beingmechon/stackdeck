@@ -751,6 +751,7 @@ function svcRow(s) {
         ? '<span class="badge crash" title="Stackdeck killed it, but a supervisor (brew services / launchd / systemd) restarted it; stop it with its own manager, e.g. brew services stop">auto-restarted</span>'
         : s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
       ${s.restartPending ? '<span class="badge dirty" title="crashed; auto-restart scheduled">restarting…</span>' : ""}
+      ${s.onDemand && !s.running ? `<span class="badge wt" title="starts itself when ${esc(s.name)}.localhost is visited${s.idleAfter ? `; stops after ${s.idleAfter} min idle` : ""}">on demand</span>` : ""}
       ${!s.running && !s.restartPending && s.lastExit && !s.lastExit.expected && s.lastExit.code !== 0
         ? `<span class="badge crash" title="exited with code ${s.lastExit.code}">crashed</span>` : ""}
       ${meta && meta.proxyPort && s.port
@@ -790,6 +791,18 @@ function svcRow(s) {
           <option value="" ${!s.group ? "selected" : ""}>Ungrouped</option>
           ${groups.map(g => `<option ${s.group === g ? "selected" : ""}>${esc(g)}</option>`).join("")}
         </select>
+        <label for="od-${s.name}">on demand</label>
+        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap">
+          <label style="display:flex; align-items:center; gap:7px; color:var(--dim); font-size:12px; text-align:left">
+            <input type="checkbox" id="od-${s.name}" ${s.onDemand ? "checked" : ""}>
+            start it when someone visits ${esc(s.name)}.localhost
+          </label>
+          <label style="display:flex; align-items:center; gap:7px; color:var(--dim); font-size:12px; text-align:left">
+            stop after
+            <input id="idle-${s.name}" value="${s.idleAfter ?? ""}" placeholder="off" style="width:64px" aria-label="idle stop minutes">
+            min idle
+          </label>
+        </div>
         <label for="dep-${s.name}">depends on</label><input id="dep-${s.name}" value="${esc((s.dependsOn || []).join(", "))}" placeholder="comma-separated service names, started first">
         <label for="rw-${s.name}">ready when</label><input id="rw-${s.name}" value="${esc((s.readyWhen && s.readyWhen.log) || "")}" placeholder="regex matched against its logs (default: port opens)">
         <label></label>
@@ -1271,6 +1284,8 @@ async function saveSvc(name) {
       restart: document.getElementById("rs-" + name).value || null,
       dependsOn: document.getElementById("dep-" + name).value.split(",").map(x => x.trim()).filter(Boolean),
       readyWhen: rw ? { log: rw } : null,
+      onDemand: document.getElementById("od-" + name).checked,
+      idleAfter: document.getElementById("idle-" + name).value.trim(),
     };
     // Rename works mid-run; the other fields need a stopped service. Skip the
     // field save when nothing but the name changed, so renaming while running
@@ -1279,7 +1294,9 @@ async function saveSvc(name) {
       String(body.port ?? "") !== String(cur.port ?? "") || JSON.stringify(env) !== JSON.stringify(cur.env || {}) ||
       (body.restart || "") !== (cur.restart || "") ||
       JSON.stringify(body.dependsOn) !== JSON.stringify(cur.dependsOn || []) ||
-      rw !== ((cur.readyWhen && cur.readyWhen.log) || "");
+      rw !== ((cur.readyWhen && cur.readyWhen.log) || "") ||
+      body.onDemand !== !!cur.onDemand ||
+      String(body.idleAfter) !== String(cur.idleAfter ?? "");
     if (fieldsChanged) await api("/api/service", body);
     const wantedGroup = document.getElementById("grp-" + name)?.value || null;
     if ((cur.group || null) !== wantedGroup)

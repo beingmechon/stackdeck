@@ -1354,6 +1354,18 @@ const handle = async (req, res) => {
       if (b.group && cfg.groups.includes(b.group)) s.group = b.group;
       else delete s.group;
     }
+    if (b.onDemand !== undefined) {
+      if (b.onDemand) {
+        if (!s.port) return json(res, 400, { error: "start on demand needs a port (that's how the proxy reaches it)" });
+        s.onDemand = true;
+      } else delete s.onDemand;
+    }
+    if (b.idleAfter !== undefined) {
+      const m = Number(b.idleAfter);
+      if (b.idleAfter === "" || b.idleAfter === null || m === 0) delete s.idleAfter;
+      else if (!Number.isFinite(m) || m < 1 || m > 1440) return json(res, 400, { error: "idle stop must be 1–1440 minutes" });
+      else s.idleAfter = Math.round(m);
+    }
     saveCfg();
     projCache.t = 0; // "configured" flags may have changed
     return json(res, 200, serviceState(s));
@@ -1417,7 +1429,7 @@ server.listen(PORT, "127.0.0.1", () =>
    Port 80 usually needs privileges (or is taken); we fall back to 8880. */
 const net = require("net");
 let PROXY_PORT = null;
-const proxyTargetPort = (hostHeader) => {
+const proxyTarget = (hostHeader) => {
   // Browsers lowercase hosts; curl and code may not — normalize.
   const m = /^([a-z0-9._-]+)\.localhost(?::\d+)?$/.exec((hostHeader || "").toLowerCase());
   if (!m) return null;
@@ -1430,24 +1442,75 @@ const proxyTargetPort = (hostHeader) => {
   };
   // 1. plain service:            orders-api.localhost
   const svc = svcByName(label);
-  if (svc && svc.port) return svc.port;
+  if (svc && svc.port) return { svc, port: svc.port };
   // 2. worktree instance:        feature-x.orders-api.localhost  (branch.service)
   const dot = label.lastIndexOf(".");
   if (dot > 0) {
     const i = instByKey(`${label.slice(dot + 1)}@${label.slice(0, dot)}`);
-    if (i) return i.port;
+    if (i) return { port: i.port };
   }
   // 3. single-label form:        orders-api--feature-x.localhost
   const dash = label.indexOf("--");
   if (dash > 0) {
     const i = instByKey(`${label.slice(0, dash)}@${label.slice(dash + 2)}`);
-    if (i) return i.port;
+    if (i) return { port: i.port };
   }
   return null;
 };
-const proxy = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
-  const port = proxyTargetPort(req.headers.host);
-  if (!port) { res.writeHead(404, { "Content-Type": "text/plain" }); return res.end("stackdeck: no service with that name (or it has no port)\n"); }
+const proxyTargetPort = (h) => (proxyTarget(h) || {}).port || null;
+
+/* ---------- start on demand / idle stop ----------
+   Opt-in per service (onDemand). Visiting <service>.localhost boots a stopped
+   service and holds the request until it's ready. Off by default on purpose:
+   the proxy is unauthenticated, so with onDemand any page you visit could
+   cause a start. idleAfter (minutes) stops it again once nothing has hit it. */
+const lastHit = nul();     // name -> timestamp of last proxied request
+const demandStarts = nul(); // name -> in-flight start promise (parallel requests share one)
+
+function svcRunning(s) {
+  if (procs[s.name] && procs[s.name].child.exitCode === null) return true;
+  if (adoptedPid(s.name)) return true;
+  return !!(s.port && portPid(s.port));
+}
+function startOnDemand(s) {
+  if (demandStarts[s.name]) return demandStarts[s.name];
+  const p = (async () => {
+    pushLog(s.name, `[stackdeck] on-demand start (request for ${s.name}.localhost)\n`);
+    const r = await startService(s);
+    if (r.code !== 200 && !r.already) return { ok: false, why: r.error };
+    const ready = await waitReady(s, 60000);
+    return ready.ok ? { ok: true } : { ok: false, why: ready.why };
+  })().finally(() => { delete demandStarts[s.name]; });
+  demandStarts[s.name] = p;
+  return p;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const s of cfg.services) {
+    const mins = Number(s.idleAfter);
+    if (!mins || !svcRunning(s)) continue;
+    const rec = procs[s.name];
+    if (!rec) continue; // only ever auto-stop what we started
+    const since = Math.max(lastHit[s.name] || 0, rec.startedAt || 0);
+    if (now - since < mins * 60000) continue;
+    pushLog(s.name, `[stackdeck] idle for ${mins}m with no requests — stopping\n`);
+    stopService(s).catch(() => {});
+  }
+}, 30000).unref();
+const proxy = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => {
+  const t = proxyTarget(req.headers.host);
+  if (!t) { res.writeHead(404, { "Content-Type": "text/plain" }); return res.end("stackdeck: no service with that name (or it has no port)\n"); }
+  const { port, svc } = t;
+  if (svc) {
+    lastHit[svc.name] = Date.now();
+    if (svc.onDemand && !svcRunning(svc)) {
+      const r = await startOnDemand(svc);
+      if (!r.ok) {
+        res.writeHead(502, { "Content-Type": "text/plain" });
+        return res.end(`stackdeck: could not start ${svc.name} on demand — ${r.why}\n`);
+      }
+    }
+  }
   // Host is rewritten: dev servers (Vite post-CVE, others) reject unknown hosts.
   const headers = { ...req.headers, host: `127.0.0.1:${port}` };
   // host "localhost" + autoSelectFamily: dev servers bind IPv4 or IPv6-only
@@ -1461,8 +1524,10 @@ const proxy = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
   req.pipe(up);
 });
 proxy.on("upgrade", (req, socket, head) => {
-  const port = proxyTargetPort(req.headers.host);
-  if (!port) return socket.destroy();
+  const t = proxyTarget(req.headers.host);
+  if (!t) return socket.destroy();
+  const port = t.port;
+  if (t.svc) lastHit[t.svc.name] = Date.now(); // a live socket counts as activity
   const up = net.connect({ port, host: "localhost", autoSelectFamily: true }, () => {
     let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
     for (let i = 0; i < req.rawHeaders.length; i += 2) {

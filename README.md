@@ -78,6 +78,13 @@ node bin/stackdeck.js
   stable names matter most). WebSockets included. Browsers resolve
   `*.localhost` natively: no /etc/hosts, no PAC files. Port 80 where
   binding is permitted, `:8880` otherwise.
+- **Start on demand** — tick it on a service and you never start that one
+  again: visiting `orders-api.localhost` boots it and holds the request until
+  it's ready (hotel's best idea). Pair it with **idle stop** and the service
+  shuts down again after N minutes with no requests, so a dozen configured
+  services cost nothing until you actually open one. Off by default, and
+  deliberately: the proxy is unauthenticated, so anything you enable this on
+  can be started by any page you visit.
 - **Multi-process repos** — a Procfile, docker-compose services, or pnpm
   workspace packages turn one repo into a section of services with one click.
 - **Parallel branches (worktrees)** — pick a branch and hit ⧉: the service
@@ -122,7 +129,9 @@ editable from the UI; the interesting ones:
       "group": "Stack A",
       "dependsOn": ["db"],                     // started (and ready) first
       "readyWhen": { "log": "Listening on" },  // or { "http": "http://…/health" }; default: port opens
-      "restart": "on-failure"                  // exponential backoff, 5 tries
+      "restart": "on-failure",                 // exponential backoff, 5 tries
+      "onDemand": true,                        // boot it when api.localhost is visited
+      "idleAfter": 30                          // stop it again after 30 min with no requests
     }
   ]
 }
