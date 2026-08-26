@@ -6,7 +6,8 @@
 
 Stackdeck finds the projects in your folders, works out how to run each one,
 and puts them on a board: Start, Kill, live logs, and a branch dropdown.
-One Node process, one HTML page, no dependencies, bound to 127.0.0.1.
+One Node process, one HTML page, no dependencies, bound to 127.0.0.1, and it
+never talks to the internet.
 
 *Spiritual successor to [hotel](https://github.com/typicode/hotel)
 (unmaintained since 2019), with the git-awareness it never had.*
@@ -39,6 +40,25 @@ git repos, and infers a run command per project across ~15 ecosystems
 (Makefile and just targets, npm/pnpm/yarn/bun scripts, Python with
 uv/poetry/pipenv, cargo, go, gradle, mix, compose, and more). A monorepo with
 several apps becomes a section of services in one click.
+
+## It never talks to the internet
+
+No telemetry, no analytics, no update checks, no accounts, no CDN. The page
+loads no external fonts, scripts, or images — the icon and logo are inline.
+The daemon listens on 127.0.0.1 and the only connections it opens are to
+loopback ports of services you configured. Nothing you do here leaves the
+machine, and it all works on a plane.
+
+Verify it yourself in one command while it's running:
+
+```bash
+lsof -nP -a -p "$(pgrep -f 'stackdeck|server.js' | head -1)" -i
+# only 127.0.0.1:<port> (LISTEN), plus loopback connections to your services
+```
+
+The single exception is a URL you type: `readyWhen: { "http": "…" }` fetches
+exactly that address to decide when a service is ready. Point it at your own
+service (it normally is `http://localhost:…`) and there is nothing else.
 
 ## Everything else
 
@@ -101,6 +121,9 @@ Everything lives in `~/.config/stackdeck/config.json` (or
 
 <details>
 <summary><b>Security model</b> — it runs shell commands, so this matters</summary>
+
+Nothing leaves your machine (see [above](#it-never-talks-to-the-internet)) —
+but the daemon runs shell commands on it, so the local surface matters.
 
 **localhost is not a security boundary**, so the API is gated by a per-install
 secret (`<state dir>/secret`, mode 0600). The page gets the token by being
