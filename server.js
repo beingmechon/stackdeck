@@ -298,7 +298,12 @@ function serviceState(s) {
   const dir = svcDir(s);
   const p = procs[s.name];
   const managedUp = p && p.child.exitCode === null;
-  const pid = managedUp ? p.child.pid : (portPid(s.port) ?? adoptedPid(s.name));
+  let pid = managedUp ? p.child.pid : (portPid(s.port) ?? adoptedPid(s.name));
+  // One of this service's own worktree instances sitting on its port is not
+  // the service running — saying "up" there would be a lie about which branch.
+  const instHoldsPort = !managedUp && !adoptedPid(s.name) && s.port &&
+    Object.values(instances).some((i) => instLive(i) && i.svc === s.name && Number(i.port) === Number(s.port));
+  if (instHoldsPort) pid = null;
   const rk = extKills[s.name];
   const resurrected = !!(rk && !managedUp && pid && pid !== rk.pid && Date.now() - rk.at < 120000);
   const g = gitInfo(dir);
@@ -311,6 +316,7 @@ function serviceState(s) {
     startedAt: p ? p.startedAt : null,
     lastExit: lastExit[s.name] || null,
     resurrected,
+    instHoldsPort: !!instHoldsPort,
     restartPending: !!(restarts[s.name] && restarts[s.name].timer && !managedUp && restarts[s.name].n > 0 && restarts[s.name].n <= 5),
     branch: g.branch, branches: g.branches, dirty: g.dirty, isGit: g.isGit,
   };
@@ -922,11 +928,12 @@ async function restartService(s) {
    Run ANOTHER branch of a service in parallel: a git worktree gives it its
    own checkout, a free port is injected as $PORT. Instances are ephemeral
    (they do not survive daemon restarts) and live under the data dir. */
-function freePortFrom(base) {
+function freePortFrom(base, allow) {
   bustPortCache();
   const taken = new Set(listeningMap().keys());
   for (const i of Object.values(instances)) if (instLive(i) && i.port) taken.add(i.port); // not yet bound ≠ free
   for (const s of cfg.services) if (s.port) taken.add(Number(s.port));
+  if (allow) taken.delete(Number(allow)); // the stopped service's own port is fair game
   for (let p = base; p < base + 200; p++) if (!taken.has(p)) return p;
   return null;
 }
@@ -969,6 +976,10 @@ async function confirmInstancePort(key, pgid, asked) {
       if (groups.get(pid) !== pgid) continue;
       if (inst.port !== port) {
         pushLog(key, `[stackdeck] listening on :${port}${asked ? ` — it ignored PORT=${asked}` : ""}\n`);
+        const owner = cfg.services.find((s) => Number(s.port) === port && s.name !== inst.svc);
+        const self = cfg.services.find((s) => s.name === inst.svc && Number(s.port) === port);
+        if (self || owner)
+          pushLog(key, `[stackdeck] that is ${self ? `${inst.svc}'s own port` : `${owner.name}'s port`} — the two cannot both run. This app reads its port from its config, not $PORT (Vite: server.port, Next: -p).\n`);
         inst.port = port;
         saveProcs();
       }
@@ -1005,7 +1016,12 @@ function startWorktree(s, branch) {
       return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
     }
   }
-  const port = s.port ? freePortFrom(Number(s.port) + 1) : null;
+  // With the main copy stopped there is nothing to run in parallel with, so the
+  // branch takes the service's real port and the rest of your stack reaches it
+  // at the address it already expects. Otherwise it gets the next free one up.
+  const port = s.port
+    ? (svcRunning(s) ? freePortFrom(Number(s.port) + 1) : freePortFrom(Number(s.port), s.port))
+    : null;
   // .env is usually gitignored, so a fresh worktree has none — fall back to
   // the main checkout's. (That's the ".env collision" this feature exists for.)
   let envFile = null;

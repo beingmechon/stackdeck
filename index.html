@@ -752,6 +752,7 @@ function svcRow(s) {
         : s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
       ${s.restartPending ? '<span class="badge dirty" title="crashed; auto-restart scheduled">restarting…</span>' : ""}
       ${s.onDemand && !s.running ? `<span class="badge wt" title="starts itself when ${esc(s.name)}.localhost is visited${s.idleAfter ? `; stops after ${s.idleAfter} min idle` : ""}">on demand</span>` : ""}
+      ${s.instHoldsPort ? `<span class="badge wt" title="a branch of this service is running below and holds :${s.port} — kill it first to start the main copy">branch has :${s.port}</span>` : ""}
       ${!s.running && !s.restartPending && s.lastExit && !s.lastExit.expected && s.lastExit.code !== 0
         ? `<span class="badge crash" title="exited with code ${s.lastExit.code}">crashed</span>` : ""}
       ${meta && meta.proxyPort && s.port
