@@ -2,200 +2,165 @@
 
 **Your projects folder, as a control panel.**
 
-<img src="docs/screenshot.png" alt="The Stackdeck board: sections of services with live status, a parallel worktree instance of orders-api running a feature branch on its own port" width="100%">
+<img src="docs/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">
 
-*(Fictional demo data — spin it up yourself with `./scripts/demo.sh`.)*
-
-A browser dashboard for the services you run every day in local development.
-Stackdeck scans your projects folder, figures out how to run each repo, and
-gives you Start / Kill / restart buttons, live logs, and a **git branch
-dropdown** that checks out the branch before launching. Zero dependencies —
-one Node process (>= 18.13), one HTML page, binds to 127.0.0.1.
+Stackdeck finds the projects in your folders, works out how to run each one,
+and puts them on a board: Start, Kill, live logs, and a branch dropdown.
+One Node process, one HTML page, no dependencies, bound to 127.0.0.1.
 
 *Spiritual successor to [hotel](https://github.com/typicode/hotel)
-(unmaintained since 2019), with the git-awareness of
-[portree](https://github.com/fairy-pitta/portree) and the multi-project scope
-neither has.*
-
-## The 40-second tour
-
-<img src="docs/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree with its own port, then switching the whole board to a custom light theme from the settings editor" width="100%">
+(unmaintained since 2019), with the git-awareness it never had.*
 
 ## Quick start
 
 ```bash
-npx stackdeck                # starts the daemon, opens http://localhost:8899
+npx stackdeck        # starts the daemon, opens http://localhost:8899
 ```
 
-Or install it onto your PATH:
+Point it at your projects folder in settings, then press **configure** on any
+project to put it on the board. `npm i -g stackdeck` if you want the CLI on
+your PATH.
 
-```bash
-npm install -g stackdeck     # then: stackdeck | stackdeck status | stackdeck logs api
-```
+## The three things it does that other process managers don't
 
-Or run from source:
+**Run a branch, not just a repo.** Every service has a branch dropdown: pick
+one and Start checks it out first. Or hit ⧉ and that branch runs in its own
+git worktree, alongside your main checkout, with a free port and the main
+copy's `.env`. If a coding agent already made a worktree for the branch,
+Stackdeck runs that one instead of fighting git over it.
 
-```bash
-git clone https://github.com/beingmechon/stackdeck && cd stackdeck
-node bin/stackdeck.js
-```
+**Visit it and it starts.** Turn on *start on demand* and opening
+`api.localhost` boots the service and holds the request until it's ready.
+With *idle stop*, it shuts down again once nothing has hit it for a while —
+so twenty configured services cost nothing until you open one.
 
-## What it does
+**Your whole projects folder, not one Procfile.** It scans your roots, detects
+git repos, and infers a run command per project across ~15 ecosystems
+(Makefile and just targets, npm/pnpm/yarn/bun scripts, Python with
+uv/poetry/pipenv, cargo, go, gradle, mix, compose, and more). A monorepo with
+several apps becomes a section of services in one click.
 
-- **Discovers your projects** — scans your project roots (default `~/Projects`),
-  detects git repos + current branch, and infers a run command per repo
-  (pnpm/npm/yarn scripts, Makefile targets, Python entrypoints with uv
-  detection, docker-compose, cargo, go).
-- **Services** — a project you've promoted to a runnable recipe: directory +
-  command + port + env. Start / Kill / restart from the browser or CLI, live
-  ANSI-colored logs (also on disk), status by pid *and* port — services
-  started outside Stackdeck show as `external` and can be killed too.
-  Killing the daemon never kills your services: pids persist to disk and a
-  restarted daemon re-adopts them (still killable, logs resume on restart).
-- **Git-aware** — a branch dropdown per service; picking a branch runs
-  `git checkout` before start, refused while the tree is dirty. Dirty repos
-  are badged.
-- **Organize the board** — drag rows between your own sections (or move by
-  keyboard), per-section *start all* / *stop all*, collapse/expand,
-  hide/unhide anything, categorize the project list.
-- **Themes** — three built-ins (calm, playful, austere) plus a custom theme
-  editor in settings: base hue, warmth, a dark↔light slider, accent color,
-  corner radius, sans/mono. Every token is derived, so a full light theme is
-  one slider away. Saved to config, or per-tab via `?theme=`.
-- **Stacks that start in order** — give a service `dependsOn` and it starts
-  after its dependencies are *ready* (a log-line regex via `readyWhen`, an
-  HTTP check, or its port opening). Section **start all** is
-  dependency-ordered; cycles fail loudly.
-- **Crash handling** — `restart: on-failure` restarts with exponential
-  backoff (5 tries, resets after a minute of clean uptime); unexpected exits
-  show a `crashed` badge and fire a browser notification. Manual stops never
-  auto-restart.
-- **Port squatter eviction** — if another process holds a service's port,
-  Start tells you the pid and offers to kill it and take the port.
-- ***.localhost domains** — a built-in reverse proxy maps
-  `<service>.localhost` → its port, and `<branch>.<service>.localhost` →
-  a running worktree instance (whose port you didn't pick — that's when
-  stable names matter most). WebSockets included. Browsers resolve
-  `*.localhost` natively: no /etc/hosts, no PAC files. Port 80 where
-  binding is permitted, `:8880` otherwise.
-- **Start on demand** — tick it on a service and you never start that one
-  again: visiting `orders-api.localhost` boots it and holds the request until
-  it's ready (hotel's best idea). Pair it with **idle stop** and the service
-  shuts down again after N minutes with no requests, so a dozen configured
-  services cost nothing until you actually open one. Off by default, and
-  deliberately: the proxy is unauthenticated, so anything you enable this on
-  can be started by any page you visit.
-- **Multi-process repos** — a Procfile, docker-compose services, or pnpm
-  workspace packages turn one repo into a section of services with one click.
-- **Parallel branches (worktrees)** — pick a branch and hit ⧉: the service
-  runs that branch in its own git worktree with a free port injected as
-  `$PORT`, side by side with the main checkout. Made for the
-  several-agents-on-several-branches workflow. Instances survive daemon
-  restarts (re-adopted like services) and worktrees are reused across runs.
-- **CLI parity** — `stackdeck status|start|stop|restart|logs <name>` talks to
-  the same daemon.
-- **MCP server** — `stackdeck mcp` exposes list/start/stop/restart/logs as
-  MCP tools over stdio, so AI coding agents can manage (and debug against)
-  your dev environment. Zero-dependency, wraps the same authenticated API.
-- **Dev tools** — detects databases and brokers installed on your machine
-  (PostgreSQL, MySQL/MariaDB, MongoDB, Redis/Valkey, Elasticsearch/OpenSearch,
-  RabbitMQ, NATS, MinIO, Temporal, ClickHouse, Mailpit, Memcached) and
-  one-click configures them as ordinary foreground services — managed child,
-  streamed logs, clean kill. Data directories are resolved from standard
-  locations (or self-initialized under `~/.local/share/stackdeck/`); no Docker,
-  no launchd/systemd indirection.
+## Everything else
 
-## Configuration
+- **Sections you arrange** — drag services (or move them by keyboard) into
+  your own groups, with *start all* / *stop all*, collapse, and hide.
+- **Stacks that start in order** — `dependsOn` waits for each dependency to be
+  *ready*: a log-line regex, an HTTP check, or its port opening.
+- **Honest status** — running state comes from pid *and* port. Services you
+  started elsewhere show as `external`. Killing something a supervisor
+  restarts says so instead of pretending. Killing the daemon leaves your
+  services running; a restarted daemon re-adopts them.
+- **Crash handling** — `restart: on-failure` backs off exponentially, and
+  unexpected exits get a badge and a browser notification.
+- ***.localhost domains** — a built-in reverse proxy, WebSockets included, so
+  `api.localhost` beats remembering ports. Browsers resolve `*.localhost`
+  natively: no /etc/hosts, no PAC file.
+- **Port conflicts, handled** — if something else holds the port, Start names
+  the pid and offers to evict it.
+- **Databases without Docker** — detects Postgres, MySQL, MongoDB, Redis,
+  Elasticsearch, RabbitMQ, NATS, MinIO, Temporal, ClickHouse and friends on
+  your machine, and runs them as ordinary services with streamed logs.
+- **CLI and MCP** — `stackdeck status|start|stop|restart|logs <name>`, plus
+  `stackdeck mcp` so coding agents can drive your dev environment themselves.
+- **Themes** — calm, playful, austere, or a custom one you build from a few
+  sliders in settings (a full light theme is one drag).
 
-Everything lives in one JSON file — `~/.config/stackdeck/config.json`
-(or `$STACKDECK_HOME/config.json`); logs sit next to it. Every field is
-editable from the UI; the interesting ones:
+Keyboard-operable throughout, WCAG AA contrast, respects reduced motion.
+
+<details>
+<summary><b>Configuration</b> — one JSON file, all of it editable from the UI</summary>
+
+Everything lives in `~/.config/stackdeck/config.json` (or
+`$STACKDECK_HOME/config.json`); logs sit next to it.
 
 ```jsonc
 {
   "port": 8899,
   "projectRoots": ["~/Projects", "~/work"],   // folders to scan
-  "categoryOrder": ["Products", "Tools"],     // display order of project categories
-  "projectCategories": { "my-repo": "Products" },
+  "categoryOrder": ["Products", "Tools"],     // order of project categories
   "groups": ["Stack A"],                      // your service sections
-  "theme": "playful",                         // or austere / custom (editor in settings)
+  "theme": "playful",                         // or austere / custom
   "services": [
     {
       "name": "api",
       "dir": "~/Projects/my-app",
       "command": "pnpm run dev",
-      "port": 3001,                            // for status detection + <name>.localhost
+      "port": 3001,                            // status detection + api.localhost
       "env": { "DEBUG": "1" },
       "group": "Stack A",
       "dependsOn": ["db"],                     // started (and ready) first
-      "readyWhen": { "log": "Listening on" },  // or { "http": "http://…/health" }; default: port opens
+      "readyWhen": { "log": "Listening on" },  // or { "http": "…" }; default: port opens
       "restart": "on-failure",                 // exponential backoff, 5 tries
       "onDemand": true,                        // boot it when api.localhost is visited
-      "idleAfter": 30                          // stop it again after 30 min with no requests
+      "idleAfter": 30                          // stop it again after 30 idle minutes
     }
   ]
 }
 ```
+</details>
 
-## Security model
+<details>
+<summary><b>Security model</b> — it runs shell commands, so this matters</summary>
 
-The daemon executes shell commands by design, and **localhost is not a
-security boundary** — so the API is gated by a per-install secret
-(`<state dir>/secret`, mode 0600). The web page receives the token by being
-served from disk by the daemon itself; the CLI reads it as the same user.
-Every `/api/*` call without it gets a 401 (only the bare `/api/ping`
-liveness check is open). State files are 0600 in a 0700 directory.
+**localhost is not a security boundary**, so the API is gated by a per-install
+secret (`<state dir>/secret`, mode 0600). The page gets the token by being
+served from disk by the daemon; the CLI reads it as the same user. Every
+`/api/*` call without it gets a 401 — only `/api/ping` is open. State files
+are 0600 in a 0700 directory.
 
-Layered on top: the daemon binds to 127.0.0.1 only, pins the `Host` header
-(DNS-rebinding defense), accepts only `application/json` POSTs (a cross-origin
-JSON POST forces a CORS preflight, which is never answered; `text/plain`
-sneak-POSTs are rejected), rejects foreign `Origin` headers, validates
-service/section names, ports, dirs, and env server-side, limits request bodies
-to 1MB, and restricts the folder browser to your home directory and configured
-roots. Config writes are atomic; a corrupt config is set aside, never fatal.
-Logs rotate at 5MB per service. Do not port-forward the daemon off your machine.
+Layered on top: binds 127.0.0.1 only, pins the `Host` header (DNS-rebinding
+defense), accepts only `application/json` POSTs (a cross-origin JSON POST
+forces a preflight that is never answered; `text/plain` sneak-POSTs are
+rejected), rejects foreign `Origin` headers, validates names, ports, dirs and
+env server-side, caps bodies at 1MB, and limits the folder browser to your
+home and configured roots. Config writes are atomic; a corrupt config is set
+aside, never fatal. **Do not port-forward the daemon off your machine.**
 
-The `*.localhost` proxy is unauthenticated by design (your browser needs it),
-but it only forwards to the loopback ports of services you configured —
-nothing else is reachable through it. Note that it makes those services
-reachable at *guessable names* from any site you visit (same-origin policy
-still blocks reading responses); that's roughly the exposure a guessable
-port already had, but if a dev service has destructive unauthenticated
-endpoints, don't give it a port in Stackdeck.
+The `*.localhost` proxy is unauthenticated by design — your browser needs it —
+and forwards only to ports of services you configured. It does make those
+reachable at guessable names from any site you visit (same-origin still blocks
+reading responses), which is roughly the exposure a guessable port already had.
+That is also why *start on demand* is opt-in per service: with it on, any page
+you visit could start that service.
+</details>
 
-Stackdeck is **Unix-only** (macOS/Linux): it relies on bash, process groups,
-and lsof/ss. The `.env` loader is intentionally minimal — flat `KEY=value`
-lines, quotes and `#` comments handled, no interpolation or multiline values.
+<details>
+<summary><b>Notes that will save you a debugging session</b></summary>
 
-## Notes that will save you a debugging session
-
-- Services spawn through a **non-login** shell with the PATH of your login
-  shell resolved once at daemon start — so nvm/homebrew/uv tools are found
-  even when the daemon was launched from a GUI, and profile files can't
-  reorder your toolchain per-spawn.
-- The HTTP server accepts headers up to 256KB, because browsers hoard
-  localhost cookies across every dev app you've ever run, and Node's 16KB
-  default silently breaks localhost apps (431s / dropped connections).
-  **Your services have the same problem** — a service that logs "Ready" and
-  still shows "this page isn't working" in the browser is usually this, and
-  `curl` will succeed while the browser fails (curl sends no cookies). For a
-  Node service, set `{"NODE_OPTIONS": "--max-http-header-size=131072"}` in
-  its env; for anything else, clear cookies for localhost.
+- Services spawn through a **non-login** shell using the PATH of your login
+  shell, resolved once at daemon start — so nvm/homebrew/uv tools are found
+  even when the daemon was launched from the GUI.
+- **A service that logs "Ready" but shows "this page isn't working"** is
+  almost always the localhost cookie jar: browsers hoard cookies for
+  `localhost` across every dev app you've run, and Node's 16KB header limit
+  rejects the request before your code sees it (`curl` succeeds because it
+  sends no cookies). Set `{"NODE_OPTIONS": "--max-http-header-size=131072"}`
+  in the service's env, or clear cookies for localhost.
+- **`$PORT` is a request, not a guarantee.** Vite reads `vite.config`, Next
+  reads `-p`. If a worktree instance ignores the port Stackdeck injects, the
+  board tells you where it actually bound. Make it obey with
+  `--port ${PORT:-5173}` (Vite) or `-p ${PORT:-3000}` (Next) in the command.
 - Kill stops the whole process group; stragglers get SIGKILL after 5s.
+- **Unix only** (bash, process groups, lsof/ss). The `.env` loader is
+  deliberately minimal: flat `KEY=value`, quotes and `#` comments, no
+  interpolation.
+</details>
 
-## macOS app (optional)
+<details>
+<summary><b>macOS app</b> — optional double-click launcher</summary>
 
 ```bash
 ./scripts/macos-app.sh    # builds ~/Applications/Stackdeck.app from this checkout
 ```
 
-Double-click to start the daemon and open the board. Linux users: `stackdeck`
-in a terminal, or add a systemd user unit for `node server.js`.
+Linux: run `stackdeck`, or add a systemd user unit for `node server.js`.
+</details>
 
 ## Status
 
-Early. Solid daily driver, small codebase (~1 file each side), no tests yet.
-Issues and PRs welcome.
+Early, but a solid daily driver — two files you can read in an evening, which
+is the point for something that runs shell commands. No tests yet. Issues and
+PRs welcome.
 
 ## License
 
