@@ -1,6 +1,6 @@
 {
   "name": "stackdeck",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Your projects folder, as a control panel. Browser dashboard to start, stop, and organize local dev services — git-branch aware, zero dependencies.",
   "license": "MIT",
   "author": "beingmechon",
