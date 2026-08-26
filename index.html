@@ -1114,7 +1114,7 @@ function instanceRow(i) {
     <div class="row-main" style="padding-left:38px">
       <span class="dot up" role="img" aria-label="running"></span>
       <span class="svc-name" style="font-weight:500">⧉ ${esc(i.svc)} <span class="cmdline">@ ${esc(i.branch)}</span></span>
-      <span class="badge wt" title="parallel worktree instance">worktree</span>
+      <span class="badge wt" title="${i.externalWorktree ? "running a worktree that already existed (made outside Stackdeck) — removing it here leaves it on disk" : "parallel worktree instance"}">${i.externalWorktree ? "existing worktree" : "worktree"}</span>
       ${meta && meta.proxyPort && i.port
         ? `<a class="badge link" target="_blank" href="http://${esc(i.key.split("@")[1])}.${esc(i.svc)}.localhost${meta.proxyPort === 80 ? "" : ":" + meta.proxyPort}"
              title="via the *.localhost proxy">${esc(i.key.split("@")[1])}.${esc(i.svc)}.localhost</a>` : ""}

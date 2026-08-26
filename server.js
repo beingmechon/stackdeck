@@ -229,7 +229,7 @@ function saveProcs() {
     if (p.child.exitCode === null && p.child.pid) out.services[n] = { pid: p.child.pid, startedAt: p.startedAt, branch: p.branch };
   for (const [n, v] of Object.entries(adopted)) if (!(n in out.services) && alive(v.pid)) out.services[n] = v;
   for (const [k, i] of Object.entries(instances))
-    if (instLive(i)) out.instances[k] = { pid: instPid(i), svc: i.svc, branch: i.branch, dir: i.dir, port: i.port, startedAt: i.startedAt };
+    if (instLive(i)) out.instances[k] = { pid: instPid(i), svc: i.svc, branch: i.branch, dir: i.dir, port: i.port, startedAt: i.startedAt, externalWorktree: !!i.externalWorktree };
   try { fs.writeFileSync(PROCS_PATH, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 }); } catch {}
 }
 function adoptedPid(name) {
@@ -930,6 +930,52 @@ function freePortFrom(base) {
   for (let p = base; p < base + 200; p++) if (!taken.has(p)) return p;
   return null;
 }
+// Where (if anywhere) a branch is already checked out. Coding agents make
+// worktrees too (Claude Code puts them under .claude/worktrees), and git
+// refuses to check the same branch out twice — so we adopt theirs instead.
+function worktreeOf(mainDir, branch) {
+  const out = git(mainDir, "worktree", "list", "--porcelain").out || "";
+  let cur = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("worktree ")) cur = line.slice("worktree ".length).trim();
+    else if (line.startsWith("branch ") && cur) {
+      if (line.slice("branch ".length).trim().replace(/^refs\/heads\//, "") === branch) return cur;
+    } else if (!line.trim()) cur = null;
+  }
+  return null;
+}
+/* Plenty of dev servers ignore $PORT (Vite reads vite.config, Next reads -p),
+   so the injected port is a request. Watch what the instance's process group
+   actually binds and correct the record — the board must not claim a port
+   nothing is listening on, and the proxy routes by this value. */
+function pgidMap() {
+  const m = new Map();
+  try {
+    for (const line of execFileSync("ps", ["-Ao", "pid=,pgid="], { timeout: 4000 }).toString().split("\n")) {
+      const t = line.trim().split(/\s+/);
+      if (t.length === 2) m.set(Number(t[0]), Number(t[1]));
+    }
+  } catch {}
+  return m;
+}
+async function confirmInstancePort(key, pgid, asked) {
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const inst = instances[key];
+    if (!inst || !instLive(inst)) return;
+    bustPortCache();
+    const groups = pgidMap();
+    for (const [port, pid] of listeningMap()) {
+      if (groups.get(pid) !== pgid) continue;
+      if (inst.port !== port) {
+        pushLog(key, `[stackdeck] listening on :${port}${asked ? ` — it ignored PORT=${asked}` : ""}\n`);
+        inst.port = port;
+        saveProcs();
+      }
+      return;
+    }
+  }
+}
 function startWorktree(s, branch) {
   const mainDir = svcDir(s);
   const g = gitInfo(mainDir);
@@ -939,8 +985,15 @@ function startWorktree(s, branch) {
   const key = `${s.name}@${safeBranch}`; // also the log-file name — must stay path-safe
   if (instances[key] && instLive(instances[key]))
     return { code: 409, error: `${key} is already running`, already: true };
-  const wtDir = path.join(DATA_HOME, "worktrees", s.name, safeBranch);
-  if (!fs.existsSync(wtDir)) {
+  const existing = worktreeOf(mainDir, branch);
+  if (existing && path.resolve(existing) === path.resolve(mainDir))
+    return { code: 409, error: `'${branch}' is checked out in the main copy — Start it there, or pick another branch` };
+  let wtDir = path.join(DATA_HOME, "worktrees", s.name, safeBranch);
+  let adopted = false;
+  if (existing && path.resolve(existing) !== path.resolve(wtDir) && fs.existsSync(existing)) {
+    wtDir = existing; // someone else's worktree for this branch: run it where it lives
+    adopted = true;
+  } else if (!fs.existsSync(wtDir)) {
     fs.mkdirSync(path.dirname(wtDir), { recursive: true });
     let r = git(mainDir, "worktree", "add", wtDir, branch);
     if (!r.ok) { // a hand-deleted worktree leaves stale metadata that blocks re-adding
@@ -973,12 +1026,13 @@ function startWorktree(s, branch) {
   child.stderr.on("data", (d) => pushLog(key, d));
   child.on("error", (e) => { pushLog(key, `[stackdeck] failed to start: ${e.message}\n`); delete instances[key]; saveProcs(); });
   child.on("exit", (code, sig) => { pushLog(key, `[stackdeck] exited (code=${code} signal=${sig})\n`); delete instances[key]; saveProcs(); });
-  instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now() };
+  instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now(), externalWorktree: adopted };
   saveProcs();
+  confirmInstancePort(key, child.pid, port); // $PORT is a request, not a guarantee
   // shorten $HOME in the banner — log panes end up in screenshots and screen shares
   const wtShort = wtDir.startsWith(os.homedir()) ? "~" + wtDir.slice(os.homedir().length) : wtDir;
-  pushLog(key, `[stackdeck] worktree instance: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtShort}\n`);
-  return { code: 200, ok: true, key, port, pid: child.pid };
+  pushLog(key, `[stackdeck] ${adopted ? "existing worktree (made outside Stackdeck)" : "worktree instance"}: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtShort}\n`);
+  return { code: 200, ok: true, key, port, pid: child.pid, externalWorktree: adopted };
 }
 
 /* ---------- http ---------- */
@@ -1118,7 +1172,7 @@ const handle = async (req, res) => {
       services: cfg.services.map(serviceState),
       instances: Object.entries(instances)
         .filter(([, i]) => instLive(i))
-        .map(([key, i]) => ({ key, svc: i.svc, branch: i.branch, port: i.port, pid: instPid(i), startedAt: i.startedAt, adopted: !i.child })),
+        .map(([key, i]) => ({ key, svc: i.svc, branch: i.branch, port: i.port, pid: instPid(i), startedAt: i.startedAt, adopted: !i.child, externalWorktree: !!i.externalWorktree })),
     });
 
   if (req.method === "POST" && url.pathname === "/api/worktree/start") {
@@ -1153,6 +1207,11 @@ const handle = async (req, res) => {
       return json(res, 400, { error: "bad branch name" });
     const key = `${name}@${safeBranch}`;
     if (instances[key] && instLive(instances[key])) return json(res, 409, { error: "stop the instance first" });
+    if (instances[key] && instances[key].externalWorktree) { // not ours to delete
+      delete instances[key];
+      saveProcs();
+      return json(res, 200, { ok: true, note: "that worktree was made outside Stackdeck — removed from the board, left on disk" });
+    }
     delete instances[key];
     const wtDir = path.join(DATA_HOME, "worktrees", name, safeBranch);
     const r = git(svcDir(s), "worktree", "remove", "--force", wtDir);
