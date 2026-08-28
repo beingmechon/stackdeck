@@ -19,8 +19,20 @@ npx stackdeck        # starts the daemon, opens http://localhost:8899
 ```
 
 Point it at your projects folder in settings, then press **configure** on any
-project to put it on the board. `npm i -g stackdeck` if you want the CLI on
-your PATH — and `stackdeck tui` if you'd rather stay in the terminal:
+project to put it on the board.
+
+Prefer the terminal? There is a full TUI:
+
+```bash
+npx stackdeck tui
+```
+
+`npx` runs a throwaway copy every time, so install it once to get the
+`stackdeck` command on your PATH:
+
+```bash
+npm i -g stackdeck     # then: stackdeck · stackdeck tui · stackdeck logs api
+```
 
 ```
  stackdeck  5 running · 12 stopped
