@@ -115,14 +115,22 @@ function openBrowser(url) {
     await ensureDaemon();
     const res = await fetch(`${BASE}/api/logs?name=${encodeURIComponent(name)}`, { headers: authHeaders() });
     if (!res.ok) { console.error("error:", (await res.json()).error); process.exit(1); }
+    // fetch() yields Uint8Array, not Buffer — .toString() would give
+    // "58,99,111,…". Decode explicitly, statefully across chunk boundaries.
+    const dec = new TextDecoder();
     let buf = "";
     for await (const chunk of res.body) {
-      buf += chunk.toString();
+      buf += dec.decode(chunk, { stream: true });
       const lines = buf.split("\n");
       buf = lines.pop(); // keep any partial SSE frame for the next chunk
       for (const line of lines)
         if (line.startsWith("data: ")) { try { console.log(JSON.parse(line.slice(6))); } catch {} }
     }
+    return;
+  }
+  if (cmd === "tui" || cmd === "top") {
+    await ensureDaemon();
+    require("./tui.js")({ BASE, authHeaders, token });
     return;
   }
   if (cmd === "mcp") {

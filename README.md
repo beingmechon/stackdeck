@@ -20,7 +20,18 @@ npx stackdeck        # starts the daemon, opens http://localhost:8899
 
 Point it at your projects folder in settings, then press **configure** on any
 project to put it on the board. `npm i -g stackdeck` if you want the CLI on
-your PATH.
+your PATH — and `stackdeck tui` if you'd rather stay in the terminal:
+
+```
+ stackdeck  5 running · 12 stopped
+ ─────────────────────────────────────────────────────────────────────
+ Shop  2/3 up
+  ● api                   :3001   71760   pnpm run dev
+    ● ⧉ feature/rate-limits :3002   71874   worktree
+  ○ studio                :5173           pnpm run dev
+ ─────────────────────────────────────────────────────────────────────
+ ↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  o open  q quit
+```
 
 ## The three things it does that other process managers don't
 
@@ -80,6 +91,9 @@ service (it normally is `http://localhost:…`) and there is nothing else.
 - **Databases without Docker** — detects Postgres, MySQL, MongoDB, Redis,
   Elasticsearch, RabbitMQ, NATS, MinIO, Temporal, ClickHouse and friends on
   your machine, and runs them as ordinary services with streamed logs.
+- **A terminal board too** — `stackdeck tui` gives you the same thing without
+  leaving the terminal: navigate, start, kill, restart, filter, and stream
+  logs in a split pane. Same daemon, so the browser stays in sync.
 - **CLI and MCP** — `stackdeck status|start|stop|restart|logs <name>`, plus
   `stackdeck mcp` so coding agents can drive your dev environment themselves.
 - **Themes** — calm, playful, austere, or a custom one you build from a few
