@@ -775,7 +775,8 @@ function svcRow(s) {
                 onclick="hideItem('service','${esc(s.name)}',${!s.hidden})">${s.hidden ? "unhide" : "hide"}</button>
       </span>
     </div>
-    <div class="drawer ${open.has(s.name) ? "open" : ""}" id="edit-${s.name}">
+    <div class="drawer ${open.has(s.name) ? "open" : ""}" id="edit-${s.name}"
+         oninput="markDirty('${s.name}')" onchange="markDirty('${s.name}')">
       <div class="fields">
         <label for="name-${s.name}">name</label><input id="name-${s.name}" value="${esc(s.name)}">
         <label for="dir-${s.name}">dir</label><input id="dir-${s.name}" value="${esc(s.dir)}">
@@ -808,7 +809,7 @@ function svcRow(s) {
         <label for="rw-${s.name}">ready when</label><input id="rw-${s.name}" value="${esc((s.readyWhen && s.readyWhen.log) || "")}" placeholder="regex matched against its logs (default: port opens)">
         <label></label>
         <div style="display:flex; gap:8px">
-          <button onclick="saveSvc('${s.name}')">Save</button>
+          <button id="save-${s.name}" onclick="saveSvc('${s.name}')">Save</button>
           <button class="ghost" onclick="delSvc('${s.name}')">remove</button>
         </div>
       </div>
@@ -831,6 +832,7 @@ function renderServices() {
     return;
   }
   const sections = groups.length ? [...groups, null] : [null];
+  const snap = snapDrawers();
   $svc.innerHTML = sections.map(g => {
     const gHidden = g !== null && hiddenGroups.includes(g);
     if (gHidden && !showHidden) return "";
@@ -857,8 +859,64 @@ function renderServices() {
       </div>`;
     return `<div class="group-block ${gHidden ? "hiddenItem" : ""}">${head}${ledger}</div>`;
   }).join("");
+  restoreDrawers(snap); // typing in an editor must survive any re-render
+  for (const n of open) markDirty(n);
   for (const n of logOpen) attachStream(n);
   updateHiddenToggle();
+}
+
+/* An open editor holds text the server has never seen. Every re-render
+   rebuilds it from server state, so snapshot what is typed and put it back. */
+const DRAWER_FIELDS = ["name", "dir", "cmd", "port", "env", "rs", "grp", "dep", "rw", "idle"];
+function snapDrawers() {
+  const snap = Object.create(null);
+  for (const n of open) {
+    const o = {};
+    for (const f of DRAWER_FIELDS) {
+      const el = document.getElementById(`${f}-${n}`);
+      if (el) o[f] = el.value;
+    }
+    const od = document.getElementById("od-" + n);
+    if (od) o.od = od.checked;
+    if (Object.keys(o).length) snap[n] = o;
+  }
+  return snap;
+}
+function markDirty(name) {
+  const b = document.getElementById("save-" + name);
+  if (!b) return;
+  const d = drawerDirty(name);
+  b.classList.toggle("add", d);
+  b.textContent = d ? "Save changes" : "Save";
+}
+function restoreDrawers(snap) {
+  for (const n of Object.keys(snap)) {
+    for (const f of DRAWER_FIELDS) {
+      const el = document.getElementById(`${f}-${n}`);
+      if (el && snap[n][f] !== undefined) el.value = snap[n][f];
+    }
+    const od = document.getElementById("od-" + n);
+    if (od && snap[n].od !== undefined) od.checked = snap[n].od;
+  }
+}
+// True when the open editor differs from the saved service.
+function drawerDirty(name) {
+  if (!open.has(name)) return false;
+  const s = services.find((x) => x.name === name);
+  const el = (f) => document.getElementById(`${f}-${name}`);
+  if (!s || !el("dir")) return false;
+  const v = (f) => (el(f) ? el(f).value.trim() : "");
+  let env = null;
+  try { env = JSON.stringify(JSON.parse(v("env") || "{}")); } catch { return true; }
+  return v("name") !== s.name || v("dir") !== s.dir || v("cmd") !== s.command ||
+    v("port") !== String(s.port ?? "") ||
+    env !== JSON.stringify(s.env || {}) ||
+    v("rs") !== (s.restart || "") ||
+    v("grp") !== (s.group || "") ||
+    v("dep") !== (s.dependsOn || []).join(", ") ||
+    v("rw") !== ((s.readyWhen && s.readyWhen.log) || "") ||
+    v("idle") !== String(s.idleAfter ?? "") ||
+    (el("od") ? el("od").checked : false) !== !!s.onDemand;
 }
 
 /* ---------- drag & drop ---------- */
@@ -1154,6 +1212,10 @@ async function stopInstance(key) {
 }
 
 async function start(name, force, btn) {
+  // Starting with an editor full of unsaved changes would run the old config
+  // and look like the edits were ignored. Say so instead.
+  if (drawerDirty(name))
+    return toast(`${name} has unsaved changes in the editor — Save them first`, true);
   const sel = document.getElementById("br-" + name);
   if (btn) { btn.disabled = true; btn.textContent = "starting…"; }
   try {
@@ -1182,6 +1244,8 @@ async function stop(name, btn) {
   setTimeout(() => loadServices(true), 400);
 }
 async function restart(name) {
+  if (drawerDirty(name))
+    return toast(`${name} has unsaved changes in the editor — Save them first`, true);
   toast(name + " restarting…");
   try { await api("/api/restart", { name }); toast(name + " restarted"); logOpen.add(name); }
   catch (e) { toast(e.message, true); }
