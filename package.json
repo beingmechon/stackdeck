@@ -4,6 +4,8 @@
   "description": "Your projects folder, as a control panel. Browser dashboard to start, stop, and organize local dev services — git-branch aware, zero dependencies.",
   "license": "MIT",
   "author": "beingmechon",
+  "homepage": "https://beingmechon.github.io/stackdeck",
+  "bugs": "https://github.com/beingmechon/stackdeck/issues",
   "bin": {
     "stackdeck": "bin/stackdeck.js"
   },

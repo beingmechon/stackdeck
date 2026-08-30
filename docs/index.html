@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stackdeck — your projects folder, as a control panel</title>
+<meta name="description" content="Stackdeck finds the projects in your folders, works out how to run each one, and puts them on a board: start, kill, live logs, and a branch dropdown. One Node process, zero dependencies, bound to 127.0.0.1.">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://beingmechon.github.io/stackdeck/">
+<meta property="og:title" content="Stackdeck">
+<meta property="og:description" content="Your projects folder, as a control panel. Zero dependencies, git-branch aware, never talks to the internet.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://beingmechon.github.io/stackdeck/">
+<meta property="og:image" content="https://beingmechon.github.io/stackdeck/demo-poster.jpg">
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="16" y="44" width="34" height="10" rx="5" fill="%2357534b"/><rect x="11" y="29" width="34" height="10" rx="5" fill="%238a8375"/><rect x="6" y="14" width="34" height="10" rx="5" fill="%23dfa662"/><circle cx="48" cy="19" r="4.5" fill="%235ec488"/><circle cx="48" cy="19" r="7.5" fill="%235ec488" opacity="0.25"/></svg>'>
+<style>
+  /* Same tokens as the app itself: the site and the tool are one object. */
+  :root {
+    --bg:        oklch(0.145 0.008 75);
+    --surface:   oklch(0.18 0.009 75);
+    --surface-2: oklch(0.215 0.011 75);
+    --border:    oklch(0.27 0.012 75);
+    --hairline:  oklch(0.23 0.010 75);
+    --text:      oklch(0.93 0.010 85);
+    --dim:       oklch(0.70 0.014 80);
+    --faint:     oklch(0.60 0.012 80);
+    --accent:    oklch(0.78 0.115 68);
+    --accent-dim:oklch(0.78 0.115 68 / .14);
+    --green:     oklch(0.74 0.145 152);
+    --green-dim: oklch(0.74 0.145 152 / .13);
+    --r-sm: 5px; --r: 7px; --r-lg: 10px;
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);  /* ease-out-quint */
+    --dur: .18s;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --pad: clamp(20px, 5vw, 40px);
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 var(--pad); }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+  code, kbd, pre { font-family: var(--mono); }
+
+  .skip {
+    position: absolute; left: -9999px; top: 8px;
+    background: var(--surface-2); color: var(--text); padding: 8px 14px; border-radius: var(--r);
+  }
+  .skip:focus { left: var(--pad); z-index: 10; }
+
+  /* ---------- header ---------- */
+  header.top {
+    display: flex; align-items: center; gap: 20px;
+    padding: 22px var(--pad); max-width: 940px; margin: 0 auto;
+  }
+  header.top svg { display: block; height: 30px; width: auto; }
+  header.top nav { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
+  header.top nav a { color: var(--dim); text-decoration: none; }
+  header.top nav a:hover { color: var(--text); text-decoration: underline; }
+
+  /* ---------- hero ---------- */
+  /* Longhands on purpose: .wrap's padding shorthand outranks a bare element
+     selector, so a shorthand here would silently drop the side gutters. */
+  .hero { padding-top: clamp(28px, 7vw, 64px); padding-bottom: clamp(28px, 5vw, 48px); }
+  h1 {
+    font-size: clamp(30px, 5.4vw, 48px); line-height: 1.1; letter-spacing: -0.022em;
+    font-weight: 660; margin: 0 0 20px; max-width: 15ch;
+  }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: clamp(17px, 2vw, 19px); color: var(--dim); max-width: 62ch; margin: 0 0 8px; }
+  .lede strong { color: var(--text); font-weight: 550; }
+  .sub { color: var(--faint); font-size: 15px; max-width: 62ch; margin: 0 0 32px; }
+
+  /* ---------- install picker ---------- */
+  .picker { max-width: 620px; }
+  .tabs { display: flex; gap: 2px; margin-bottom: 10px; }
+  .tabs button {
+    font: 500 13px/1 var(--sans); color: var(--faint);
+    background: none; border: 0; border-radius: var(--r-sm);
+    padding: 7px 12px; cursor: pointer; transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+  }
+  .tabs button:hover { color: var(--text); }
+  .tabs button[aria-selected="true"] { color: var(--accent); background: var(--accent-dim); }
+  .cmd {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+    padding: 14px 14px 14px 18px;
+  }
+  .cmd .prompt { color: var(--faint); user-select: none; }
+  .cmd code {
+    font-size: 14px; color: var(--text); overflow-x: auto; white-space: nowrap;
+    flex: 1; min-width: 0; scrollbar-width: thin;
+  }
+  .copy {
+    flex: none; font: 500 13px/1 var(--sans); color: var(--dim);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+    padding: 7px 11px; cursor: pointer; min-width: 62px;
+    transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  }
+  .copy:hover { color: var(--text); border-color: var(--faint); }
+  .copy.done { color: var(--green); border-color: var(--green); }
+  .note { color: var(--faint); font-size: 13.5px; margin: 10px 2px 0; }
+  .note code { color: var(--dim); font-size: 13px; }
+  html.js .panel[hidden] { display: none; }
+  /* Without JS every command is simply listed; nothing depends on the tabs. */
+  html:not(.js) .tabs { display: none; }
+  html:not(.js) .panel + .panel { margin-top: 10px; }
+
+  /* ---------- board replica ---------- */
+  figure { margin: 0; }
+  .board {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+    overflow: hidden; font-size: 14px;
+  }
+  .board .head {
+    display: flex; align-items: baseline; gap: 10px; padding: 10px 16px;
+    border-bottom: 1px solid var(--hairline); color: var(--faint);
+    font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .board .head .count { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--dim); }
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-top: 1px solid var(--hairline); }
+  .row:first-of-type { border-top: 0; }
+  .row.child { padding-left: 40px; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: transparent; border: 1.5px solid var(--faint);
+  }
+  .dot.up { background: var(--green); border-color: var(--green); box-shadow: 0 0 0 3px var(--green-dim); }
+  .name { font-weight: 600; min-width: 92px; }
+  .row.child .name { font-weight: 500; color: var(--dim); font-family: var(--mono); font-size: 12.5px; }
+  .addr { font-family: var(--mono); font-size: 12.5px; color: var(--dim); width: 96px; flex: none; }
+  .cmdline { font-family: var(--mono); font-size: 12.5px; color: var(--faint); flex: 1; min-width: 0;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag {
+    font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: var(--r-sm); flex: none;
+    color: var(--dim); background: oklch(0.30 0.012 75 / .5);
+  }
+  .tag.branch { font-family: var(--mono); font-weight: 500; }
+  .tag.wt { color: var(--accent); background: var(--accent-dim); }
+  .fauxbtn {
+    font-size: 12px; font-weight: 500; color: var(--dim); padding: 4px 10px; flex: none;
+    border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2);
+  }
+  figcaption { color: var(--faint); font-size: 13px; margin-top: 10px; }
+
+  /* ---------- sections ---------- */
+  section.wrap { padding-top: clamp(44px, 8vw, 80px); }
+  h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--faint); margin: 0 0 26px;
+  }
+  h3 { font-size: 21px; line-height: 1.3; letter-spacing: -0.012em; font-weight: 620; margin: 0 0 8px; }
+  p { margin: 0 0 16px; max-width: 68ch; color: var(--dim); }
+  p.tight { margin-bottom: 0; }
+
+  /* Numbered, not carded: the ordinal sits in the margin on wide screens. */
+  .points { display: grid; gap: clamp(28px, 4vw, 44px); }
+  .point { display: grid; grid-template-columns: 2.5rem 1fr; gap: 0 18px; align-items: start; }
+  .point .n {
+    font-family: var(--mono); font-size: 13px; color: var(--accent);
+    padding-top: 6px; letter-spacing: .04em;
+  }
+  .point p:last-child { margin-bottom: 0; }
+  .point code { font-size: 13.5px; color: var(--text); background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+
+  /* ---------- demo ---------- */
+  .demo { position: relative; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
+          background: var(--surface); display: block; width: 100%; padding: 0; cursor: pointer; }
+  .demo img { display: block; width: 100%; height: auto; }
+  .demo .play {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: oklch(0.145 0.008 75 / .45); transition: background var(--dur) var(--ease);
+  }
+  .demo:hover .play { background: oklch(0.145 0.008 75 / .3); }
+  .demo .play span {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    font: 500 14px/1 var(--sans); padding: 12px 20px; border-radius: 100px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .demo .play span::before {
+    content: ""; width: 0; height: 0; border-left: 9px solid var(--accent);
+    border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  }
+
+  /* ---------- code blocks ---------- */
+  pre {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+    padding: 18px 20px; overflow-x: auto; font-size: 13px; line-height: 1.65;
+    color: var(--dim); margin: 0 0 16px;
+  }
+  pre b { color: var(--text); font-weight: 600; }
+  pre .g { color: var(--green); }
+  pre .a { color: var(--accent); }
+  pre .f { color: var(--faint); }
+
+  /* ---------- install detail ---------- */
+  .method { border-top: 1px solid var(--hairline); padding: 26px 0; }
+  .method:first-of-type { border-top: 0; padding-top: 0; }
+  .method h3 { font-size: 17px; margin-bottom: 4px; }
+  .method h3 .kicker { color: var(--faint); font-weight: 400; font-size: 14px; margin-left: 8px; }
+  .method pre { margin: 12px 0 10px; }
+  .method p { font-size: 14.5px; margin-bottom: 0; }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: clamp(56px, 9vw, 96px); border-top: 1px solid var(--hairline);
+    padding: 28px 0 56px; color: var(--faint); font-size: 14px;
+  }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+  footer a { color: var(--dim); }
+  footer .spacer { flex: 1; }
+
+  @media (max-width: 620px) {
+    .point { grid-template-columns: 1fr; gap: 6px; }
+    .point .n { padding-top: 0; }
+    .addr { width: auto; }
+    .name { min-width: 0; }
+    /* Keep one action per row: enough to read as a control panel, narrow
+       enough that service names stop wrapping. */
+    .row .cmdline, .row .tag.branch, .row .fauxbtn:last-child { display: none; }
+  }
+
+  /* One thing moves, and it means something: a service that is up. */
+  @keyframes halo {
+    0%, 100% { box-shadow: 0 0 0 3px var(--green-dim); }
+    50%      { box-shadow: 0 0 0 5px oklch(0.74 0.145 152 / .07); }
+  }
+  .dot.up { animation: halo 2.6s var(--ease) infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <svg viewBox="0 0 300 64" height="30" role="img" aria-label="Stackdeck">
+    <rect x="16" y="44" width="34" height="10" rx="5" fill="#57534b"/>
+    <rect x="11" y="29" width="34" height="10" rx="5" fill="#8a8375"/>
+    <rect x="6"  y="14" width="34" height="10" rx="5" fill="#dfa662"/>
+    <circle cx="48" cy="19" r="4.5" fill="#5ec488"/>
+    <circle cx="48" cy="19" r="7.5" fill="#5ec488" opacity="0.25"/>
+    <text x="66" y="43" font-family="-apple-system, 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="650" letter-spacing="0.5" fill="#e8e2d6">stack<tspan fill="#dfa662">deck</tspan></text>
+  </svg>
+  <nav>
+    <a href="#install">Install</a>
+    <a href="https://github.com/beingmechon/stackdeck">GitHub</a>
+    <a href="https://www.npmjs.com/package/stackdeck">npm</a>
+  </nav>
+</header>
+
+<main id="main">
+  <div class="wrap hero">
+    <h1>Your projects folder, as a <em>control panel</em>.</h1>
+    <p class="lede">Stackdeck finds the projects in your folders, works out how to run each one,
+      and puts them on a board: <strong>start, kill, live logs, and a branch dropdown</strong>.</p>
+    <p class="sub">One Node process, one HTML page, zero dependencies, bound to 127.0.0.1.
+      It never talks to the internet.</p>
+
+    <div class="picker">
+      <div class="tabs" role="tablist" aria-label="Installation method">
+        <button role="tab" id="t-npm"  aria-controls="p-npm"  aria-selected="true"  tabindex="0">npm</button>
+        <button role="tab" id="t-curl" aria-controls="p-curl" aria-selected="false" tabindex="-1">curl</button>
+        <button role="tab" id="t-brew" aria-controls="p-brew" aria-selected="false" tabindex="-1">Homebrew</button>
+      </div>
+
+      <div class="panel" id="p-npm" role="tabpanel" aria-labelledby="t-npm" tabindex="0">
+        <div class="cmd"><span class="prompt" aria-hidden="true">$</span><code>npm i -g stackdeck &amp;&amp; stackdeck</code><button class="copy" type="button">Copy</button></div>
+        <p class="note">Just want to look? <code>npx stackdeck</code> runs it without installing anything.</p>
+      </div>
+      <div class="panel" id="p-curl" role="tabpanel" aria-labelledby="t-curl" tabindex="0" hidden>
+        <div class="cmd"><span class="prompt" aria-hidden="true">$</span><code>curl -fsSL https://beingmechon.github.io/stackdeck/install.sh | sh</code><button class="copy" type="button">Copy</button></div>
+        <p class="note">Installs into <code>~/.local</code>. No sudo, no npm. <a href="#install">What it does, line by line</a>.</p>
+      </div>
+      <div class="panel" id="p-brew" role="tabpanel" aria-labelledby="t-brew" tabindex="0" hidden>
+        <div class="cmd"><span class="prompt" aria-hidden="true">$</span><code>brew install beingmechon/tap/stackdeck</code><button class="copy" type="button">Copy</button></div>
+        <p class="note">macOS and Linuxbrew. Pulls in <code>node</code> if you don't have it.</p>
+      </div>
+      <p class="note" style="margin-top:16px">Needs Node 18.13 or newer, on macOS or Linux.
+        Then point it at your projects folder and press <b>configure</b> on anything it found.</p>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <figure>
+      <div class="board">
+        <div class="head">Shop <span class="count">2 of 3 up</span></div>
+        <div class="row">
+          <span class="dot up"></span>
+          <span class="name">api</span>
+          <span class="addr">:3001</span>
+          <span class="cmdline">pnpm run dev</span>
+          <span class="tag branch">main</span>
+          <span class="fauxbtn">Kill</span>
+          <span class="fauxbtn">Logs</span>
+        </div>
+        <div class="row child">
+          <span class="dot up"></span>
+          <span class="name">feature/rate-limits</span>
+          <span class="addr">:3002</span>
+          <span class="cmdline">pnpm run dev</span>
+          <span class="tag wt">worktree</span>
+          <span class="fauxbtn">Kill</span>
+          <span class="fauxbtn">Logs</span>
+        </div>
+        <div class="row">
+          <span class="dot"></span>
+          <span class="name">studio</span>
+          <span class="addr">:5173</span>
+          <span class="cmdline">pnpm run dev</span>
+          <span class="tag branch">main</span>
+          <span class="fauxbtn">Start</span>
+          <span class="fauxbtn">Logs</span>
+        </div>
+        <div class="head" style="border-top:1px solid var(--hairline)">Data <span class="count">1 of 2 up</span></div>
+        <div class="row">
+          <span class="dot up"></span>
+          <span class="name">postgres</span>
+          <span class="addr">:5432</span>
+          <span class="cmdline">postgres -D /usr/local/var/postgres</span>
+          <span class="tag">external</span>
+          <span class="fauxbtn">Kill</span>
+          <span class="fauxbtn">Logs</span>
+        </div>
+      </div>
+      <figcaption>A drawing of the board, not a live one: two branches of the same repo running side by side,
+        and a Postgres someone started in a terminal an hour ago.</figcaption>
+    </figure>
+  </div>
+
+  <section class="wrap">
+    <h2>Three things it does that other process managers don't</h2>
+    <div class="points">
+      <div class="point">
+        <div class="n">01</div>
+        <div>
+          <h3>Run a branch, not just a repo</h3>
+          <p>Every service has a branch dropdown: pick one and Start checks it out first. Or hit the
+            worktree button and that branch runs beside your main checkout, in its own git worktree,
+            on a free port, with the main copy's <code>.env</code>. If a coding agent already made a
+            worktree for that branch, Stackdeck runs the one that exists instead of fighting git over it.</p>
+        </div>
+      </div>
+      <div class="point">
+        <div class="n">02</div>
+        <div>
+          <h3>Visit it and it starts</h3>
+          <p>Turn on <em>start on demand</em> and opening <code>api.localhost</code> boots the service,
+            holding the request until it is ready. With <em>idle stop</em> it shuts down again once
+            nothing has touched it for a while, so twenty configured services cost you nothing
+            until you open one.</p>
+        </div>
+      </div>
+      <div class="point">
+        <div class="n">03</div>
+        <div>
+          <h3>Your whole projects folder, not one Procfile</h3>
+          <p>It scans your roots, finds the git repos, and infers a run command per project across
+            about fifteen ecosystems: Makefile and just targets, npm/pnpm/yarn/bun scripts, Python
+            with uv, poetry or pipenv, cargo, go, gradle, mix, compose, and more. A monorepo with
+            several apps becomes a whole section of services in one click.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>Watch it work</h2>
+    <button class="demo" type="button" id="demo">
+      <img src="demo-poster.jpg" width="1000" height="570"
+           alt="The Stackdeck board with several services, one streaming logs">
+      <span class="play" aria-hidden="true"><span>Play the demo (4 MB)</span></span>
+    </button>
+    <p class="note">Live logs with filtering, then a second branch of the same API started in a parallel
+      worktree on its own port, then the whole board switched to a light theme.</p>
+  </section>
+
+  <section class="wrap">
+    <h2>It never talks to the internet</h2>
+    <p>No telemetry, no analytics, no update checks, no accounts, no CDN. The page loads no external
+      fonts, scripts or images. The daemon listens on 127.0.0.1 and the only connections it opens are
+      to loopback ports of services you configured yourself. It all works on a plane, and you can
+      check that claim in one command while it is running:</p>
+    <pre><span class="f">$</span> lsof -nP -a -p "$(pgrep -f 'stackdeck|server.js' | head -1)" -i
+<span class="f">only 127.0.0.1 listeners, plus loopback connections to your own services</span></pre>
+    <p class="tight">This page is the same: nothing on it is loaded from anywhere but this repository.</p>
+  </section>
+
+  <section class="wrap">
+    <h2>There is a terminal board too</h2>
+    <p>Same daemon, so the browser stays in sync with it. Navigate, start, kill, restart, filter,
+      and stream logs in a split pane.</p>
+<pre><span class="f">$</span> <b>stackdeck tui</b>
+
+ <b>stackdeck</b>  <span class="f">5 running · 12 stopped</span>
+ ─────────────────────────────────────────────────────────────────
+ <span class="f">Shop  2/3 up</span>
+  <span class="g">●</span> <b>api</b>                   <span class="a">:3001</span>   71760   pnpm run dev
+    <span class="g">●</span> ⧉ feature/rate-limits <span class="a">:3002</span>   71874   worktree
+  ○ studio                <span class="f">:5173</span>           pnpm run dev
+ ─────────────────────────────────────────────────────────────────
+ <span class="f">↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  o open  q quit</span></pre>
+  </section>
+
+  <section class="wrap" id="install">
+    <h2>Install</h2>
+    <div class="method">
+      <h3>npm <span class="kicker">the usual way</span></h3>
+      <pre><span class="f">$</span> npm i -g stackdeck</pre>
+      <p>Published with provenance, so npm can show you which commit and which GitHub Actions run
+        built the tarball. <code>npx stackdeck</code> works too, but npx installs nothing: you get a
+        throwaway copy each time and no <code>stackdeck</code> command on your PATH.</p>
+    </div>
+    <div class="method">
+      <h3>curl <span class="kicker">no npm needed</span></h3>
+      <pre><span class="f">$</span> curl -fsSL https://beingmechon.github.io/stackdeck/install.sh | sh</pre>
+      <p>Downloads the published tarball, checks it against the sha512 npm recorded at publish time,
+        unpacks it into <code>~/.local/lib/stackdeck</code> and symlinks one command. Nothing is
+        compiled and nothing is fetched afterwards, because there are no dependencies to fetch.
+        Pin a version with <code>STACKDECK_VERSION=0.8.2</code>, move it with
+        <code>STACKDECK_PREFIX=/opt</code>, and remove it with the same script and
+        <code>-s -- --uninstall</code>.
+        <a href="https://github.com/beingmechon/stackdeck/blob/main/docs/install.sh">Read it before you pipe it</a>.</p>
+    </div>
+    <div class="method">
+      <h3>Homebrew <span class="kicker">macOS and Linuxbrew</span></h3>
+      <pre><span class="f">$</span> brew install beingmechon/tap/stackdeck</pre>
+      <p>From a personal tap rather than homebrew-core, which only takes projects with a track record.
+        The formula installs the same npm tarball and depends on <code>node</code>.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>What it costs you</h2>
+    <p>About 80 KB on disk and one Node process. Two files you can read in an evening, which is the
+      point for something that runs shell commands on your machine: the daemon is one
+      <code>server.js</code>, the board is one <code>index.html</code>, and there is no build step
+      and no dependency tree between you and either of them.</p>
+    <p class="tight">MIT licensed, and the spiritual successor to
+      <a href="https://github.com/typicode/hotel">hotel</a>, which has been unmaintained since 2019,
+      with the git-awareness it never had.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>MIT licensed</span>
+    <span class="spacer"></span>
+    <a href="https://github.com/beingmechon/stackdeck">Source</a>
+    <a href="https://github.com/beingmechon/stackdeck/issues">Issues</a>
+    <a href="https://www.npmjs.com/package/stackdeck">npm</a>
+  </div>
+</footer>
+
+<div aria-live="polite" class="skip" id="live"></div>
+
+<script>
+document.documentElement.classList.add("js");
+
+/* Install picker. Roving tabindex, arrows and Home/End, per the APG tabs pattern. */
+(() => {
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const select = (tab, focus = true) => {
+    for (const t of tabs) {
+      const on = t === tab;
+      t.setAttribute("aria-selected", String(on));
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    }
+    if (focus) tab.focus();
+  };
+  tabs.forEach((tab, i) => {
+    tab.addEventListener("click", () => select(tab, false));
+    tab.addEventListener("keydown", (e) => {
+      const at = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (at === undefined) return;
+      e.preventDefault();
+      select(tabs[(at + tabs.length) % tabs.length]);
+    });
+  });
+})();
+
+/* Copy buttons. The label doubles as the confirmation, and the live region
+   says so for anyone who cannot see the label change. */
+for (const btn of document.querySelectorAll(".copy")) {
+  btn.addEventListener("click", async () => {
+    const text = btn.closest(".cmd").querySelector("code").textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = "Copied";
+      btn.classList.add("done");
+      document.getElementById("live").textContent = "Command copied to clipboard";
+      setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1800);
+    } catch {
+      // Clipboard denied (or an insecure origin): select the text so ⌘C still works.
+      const r = document.createRange();
+      r.selectNodeContents(btn.closest(".cmd").querySelector("code"));
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      btn.textContent = "Press ⌘C";
+    }
+  });
+}
+
+/* The demo is 4 MB, so it stays a still frame until someone asks for it. */
+document.getElementById("demo").addEventListener("click", function () {
+  const img = this.querySelector("img");
+  if (img.src.endsWith("demo.gif")) return;
+  this.querySelector(".play").remove();
+  img.src = "demo.gif";
+  img.alt = "Stackdeck: live logs with filtering, a second branch started in a worktree, then a theme change";
+  this.style.cursor = "default";
+}, { once: true });
+</script>
+</body>
+</html>

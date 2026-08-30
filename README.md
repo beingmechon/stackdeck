@@ -2,7 +2,7 @@
 
 **Your projects folder, as a control panel.**
 
-<img src="docs/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">
+<img src="https://beingmechon.github.io/stackdeck/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">
 
 Stackdeck finds the projects in your folders, works out how to run each one,
 and puts them on a board: Start, Kill, live logs, and a branch dropdown.
@@ -12,27 +12,29 @@ never talks to the internet.
 *Spiritual successor to [hotel](https://github.com/typicode/hotel)
 (unmaintained since 2019), with the git-awareness it never had.*
 
-## Quick start
+## Install
 
 ```bash
-npx stackdeck        # starts the daemon, opens http://localhost:8899
+npm i -g stackdeck                                                 # npm
+brew install beingmechon/tap/stackdeck                             # Homebrew
+curl -fsSL https://beingmechon.github.io/stackdeck/install.sh | sh  # no npm needed
+```
+
+Node 18.13+, macOS or Linux. The curl installer unpacks into `~/.local` after
+checking the tarball against the hash npm recorded at publish time; read it
+first at [docs/install.sh](docs/install.sh), or undo it with
+`curl -fsSL <same url> | sh -s -- --uninstall`.
+
+```bash
+stackdeck        # starts the daemon, opens http://localhost:8899
+stackdeck tui    # the same board, in your terminal
 ```
 
 Point it at your projects folder in settings, then press **configure** on any
 project to put it on the board.
 
-Prefer the terminal? There is a full TUI:
-
-```bash
-npx stackdeck tui
-```
-
-`npx` runs a throwaway copy every time, so install it once to get the
-`stackdeck` command on your PATH:
-
-```bash
-npm i -g stackdeck     # then: stackdeck · stackdeck tui · stackdeck logs api
-```
+Just looking? `npx stackdeck` runs it without installing anything, and leaves
+no `stackdeck` command on your PATH afterwards.
 
 ```
  stackdeck  5 running · 12 stopped

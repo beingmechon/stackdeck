@@ -9,7 +9,9 @@
  *   stackdeck stop <name>    stop a service
  *   stackdeck restart <name> restart a service
  *   stackdeck logs <name>    stream a service's logs (Ctrl-C to quit)
+ *   stackdeck tui            the same board, in the terminal
  *   stackdeck mcp            run an MCP server over stdio (for AI agents)
+ *   stackdeck version|help
  */
 "use strict";
 const path = require("path");
@@ -18,6 +20,10 @@ const os = require("os");
 const { spawn, execFileSync } = require("child_process");
 
 const SERVER = path.join(__dirname, "..", "server.js");
+const VERSION = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version; }
+  catch { return "unknown"; }
+})();
 
 // The API requires the per-install secret; same-user processes read it from disk.
 function stateHome() {
@@ -79,8 +85,30 @@ function openBrowser(url) {
   try { execFileSync(cmd, [url], { stdio: "ignore" }); } catch { console.log(url); }
 }
 
+const USAGE = `stackdeck ${VERSION} — your projects folder, as a control panel
+
+  stackdeck                 start the daemon (if down) and open the board
+  stackdeck tui             the same board, in your terminal
+  stackdeck status          list services and their state
+  stackdeck start <name>    start a service
+  stackdeck stop <name>     stop a service
+  stackdeck restart <name>  restart a service
+  stackdeck logs <name>     stream a service's logs (Ctrl-C to quit)
+  stackdeck daemon          run the daemon in the foreground
+  stackdeck mcp             run an MCP server over stdio (for AI agents)
+
+  stackdeck version         print the version
+  stackdeck help            this text
+
+Board: ${BASE}   ·   config and logs: ${stateHome()}`;
+
 (async () => {
   const [cmd, name] = process.argv.slice(2);
+
+  // Answered without touching the daemon: `--version` must work on a machine
+  // where nothing is running (Homebrew's install test does exactly that).
+  if (["version", "--version", "-v"].includes(cmd)) { console.log(VERSION); return; }
+  if (["help", "--help", "-h"].includes(cmd)) { console.log(USAGE); return; }
 
   if (!cmd || cmd === "up" || cmd === "open") {
     await ensureDaemon();
@@ -138,7 +166,8 @@ function openBrowser(url) {
     runMcp();
     return;
   }
-  console.error("unknown command:", cmd);
+  console.error(`unknown command: ${cmd}\n`);
+  console.error(USAGE);
   process.exit(1);
 })();
 
@@ -204,7 +233,7 @@ function runMcp() {
       try { msg = JSON.parse(line); } catch { continue; }
       if (msg.method === "initialize")
         reply(msg.id, { protocolVersion: "2025-03-26", capabilities: { tools: {} },
-          serverInfo: { name: "stackdeck", version: "0.3.0" } });
+          serverInfo: { name: "stackdeck", version: VERSION } });
       else if (msg.method === "tools/list") reply(msg.id, { tools: TOOLS });
       else if (msg.method === "tools/call") {
         pending++; // dispatched concurrently: a slow call must not delay (or exit before) queued ones
