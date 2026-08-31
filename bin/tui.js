@@ -50,6 +50,8 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
   let sel = 0, scroll = 0;
   let logFor = null, logLines = [], logStream = null;
   let status = "", statusAt = 0, filter = null, filtering = false, dead = false;
+  // "board" is the services you configured; "ports" is the whole machine.
+  let view = "board", ports = [], armed = null, detail = null;
 
   const say = (m) => { status = m; statusAt = Date.now(); render(); };
 
@@ -64,14 +66,22 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
   }
   async function refresh() {
     try {
-      const d = await api("/api/services");
-      services = d.services || []; instances = d.instances || [];
-      groups = d.groups || []; hiddenGroups = d.hiddenGroups || [];
+      if (view === "ports") {
+        // Never re-read the list while a kill is armed: the row under the
+        // cursor must be the row the second keypress acts on.
+        if (armed !== null) return;
+        ports = (await api("/api/ports?fresh=1")).ports || [];
+      } else {
+        const d = await api("/api/services");
+        services = d.services || []; instances = d.instances || [];
+        groups = d.groups || []; hiddenGroups = d.hiddenGroups || [];
+      }
       build();
       render();
     } catch (e) { if (!dead) say(C.red("daemon unreachable: " + e.message)); }
   }
   function build() {
+    if (view === "ports") return buildPorts();
     const q = (filter || "").toLowerCase();
     const match = (s) => !q || s.name.toLowerCase().includes(q) || (s.command || "").toLowerCase().includes(q);
     const prev = rows[sel];
@@ -99,6 +109,24 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
     if (sel < 0) sel = 0;
     if (rows[sel] && rows[sel].kind === "head") move(1);
   }
+
+  function buildPorts() {
+    const q = (filter || "").toLowerCase();
+    const prev = rows[sel];
+    rows = ports
+      .filter((p) => !q || `${p.port} ${p.pid ?? ""} ${p.proc ?? ""} ${p.cmd ?? ""} ${p.owner ? p.owner.svc : ""}`.toLowerCase().includes(q))
+      .map((p) => ({ kind: "port", p }));
+    if (prev && prev.kind === "port") {
+      const at = rows.findIndex((r) => r.p.port === prev.p.port && r.p.pid === prev.p.pid);
+      if (at >= 0) sel = at;
+    }
+    if (sel >= rows.length) sel = rows.length - 1;
+    if (sel < 0) sel = 0;
+  }
+
+  const age = (s) => s == null ? "" :
+    s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + "m" :
+    s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
 
   /* ---------- logs ---------- */
   async function openLogs(name) {
@@ -158,19 +186,32 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
 
     const up = services.filter((s) => s.running).length;
     const L = [];
+    const foreign = ports.filter((p) => p.foreign).length;
     L.push(" " + C.bold("stack") + C.accent("deck") + "  " +
-      C.dim(`${up} running · ${services.length - up} stopped`) +
+      (view === "ports"
+        ? C.accent("ports") + C.dim(`  ${ports.length} listening` + (foreign ? ` · ${foreign} need sudo` : ""))
+        : C.dim(`${up} running · ${services.length - up} stopped`)) +
       (filter ? "  " + C.accent(`/${filter}`) : "") +
-      (instances.length ? C.dim(`  · ${instances.length} worktree`) : ""));
+      (view === "board" && instances.length ? C.dim(`  · ${instances.length} worktree`) : ""));
     L.push(C.faint(" " + "─".repeat(Math.max(0, W - 2))));
 
-    const view = rows.slice(scroll, scroll + listH);
+    const visible = rows.slice(scroll, scroll + listH);
     for (let n = 0; n < listH; n++) {
-      const r = view[n];
+      const r = visible[n];
       if (!r) { L.push(""); continue; }
       const on = rows.indexOf(r) === sel;
       let line;
-      if (r.kind === "head") {
+      if (r.kind === "port") {
+        const p = r.p;
+        if (p.foreign) {
+          line = `  ${C.faint("·")} ${pad(C.faint(":" + p.port), 8)}${pad(C.faint("—"), 9)}` +
+                 C.faint("owned by root or another account — needs sudo");
+        } else {
+          const tag = p.owner ? C.accent(p.owner.svc + " ") : p.self ? C.accent("stackdeck ") : p.system ? C.faint("system ") : "";
+          line = `  ${C.green("●")} ${pad(C.text(":" + p.port), 8)}${pad(C.faint(String(p.pid)), 9)}` +
+                 `${pad(cut(C.dim(p.proc || "?"), 13), 14)}${pad(C.faint(age(p.age)), 5)}${tag}${C.faint(tilde(p.cmd || ""))}`;
+        }
+      } else if (r.kind === "head") {
         line = " " + C.dim(C.bold(r.label)) + C.faint(`  ${r.up}/${r.total} up`);
       } else if (r.kind === "svc") {
         const s = r.s;
@@ -188,7 +229,8 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
     }
 
     if (logFor) {
-      L.push(C.faint(" ─── ") + C.accent("logs: " + logFor) + C.faint(" " + "─".repeat(Math.max(0, W - 12 - logFor.length))));
+      const title = view === "ports" ? "pid " + logFor : "logs: " + logFor;
+      L.push(C.faint(" ─── ") + C.accent(title) + C.faint(" " + "─".repeat(Math.max(0, W - 7 - title.length))));
       const tail = logLines.slice(-logH);
       for (let n = 0; n < logH; n++) {
         const l = tail[n];
@@ -200,17 +242,74 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
     const fresh = Date.now() - statusAt < 4000 ? status : "";
     L.push(" " + (fresh || C.faint(
       filtering ? "type to filter · enter accept · esc clear"
+      : view === "ports" ? "↑↓ move  x kill (twice)  ⏎ details  / filter  p board  q quit"
       : filter ? "↑↓ move  s start  x kill  r restart  ⏎ logs  esc clear filter  q quit"
-      : "↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  o open  q quit")));
+      : "↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  p ports  o open  q quit")));
 
     out.write(home + L.map((l) => l + clearLine).join("\n") + clearDown);
   }
 
   /* ---------- actions ---------- */
   const current = () => rows[sel];
+
+  function togglePorts() {
+    view = view === "ports" ? "board" : "ports";
+    armed = null; closeLogs(); filter = null; sel = 0; scroll = 0;
+    rows = [];
+    say(view === "ports" ? C.faint("reading the port table…") : "");
+    refresh();
+  }
+
+  /* Two presses of x, like the browser's two clicks: the first names what is
+     about to die, the second does it. Anything else disarms. */
+  async function killPort() {
+    const r = current();
+    if (!r || r.kind !== "port") return;
+    const p = r.p;
+    if (p.foreign) return say(C.faint(`:${p.port} belongs to another user — Stackdeck never uses sudo`));
+    if (p.self) return say(C.faint("that is Stackdeck itself — quit it where you started it"));
+    if (armed !== p.pid) {
+      armed = p.pid;
+      return say(C.accent(`press x again to kill ${p.proc || p.pid} on :${p.port}`) +
+        (p.system ? C.red("  — this is an operating system process") : ""));
+    }
+    armed = null;
+    say(`killing ${p.pid}…`);
+    try {
+      const res = await api("/api/kill", { pid: p.pid });
+      say(res.note ? C.accent(res.note) : `killed ${p.pid} on :${p.port}`);
+    } catch (e) { say(C.red(e.message)); }
+    refresh();
+  }
+
+  // Reuses the log pane: same slot, different content.
+  async function portDetail() {
+    const r = current();
+    if (!r || r.kind !== "port" || r.p.foreign) return;
+    const p = r.p;
+    if (logFor === p.pid) { closeLogs(); return render(); }
+    closeLogs();
+    logFor = p.pid; logLines = ["reading…"];
+    render();
+    try {
+      const d = await api(`/api/proc?pid=${p.pid}`);
+      logLines = [
+        `command    ${p.cmd || "?"}`,
+        `directory  ${d.cwd || "not readable"}`,
+        `parent     ${d.parent ? d.parent.pid + " · " + d.parent.cmd : "none"}`,
+        `address    ${p.addrs.join("  ")}`,
+        `ports      ${d.ports.map((x) => ":" + x.port).join("  ")}`,
+        `memory     ${p.rss ? Math.round(p.rss / 1024) + " MB" : "?"}`,
+        p.system ? "note       part of the operating system, running as you — launchd will usually restart it" : "",
+      ].filter(Boolean);
+    } catch (e) { logLines = [String(e.message)]; }
+    render();
+  }
+
   async function act(kind) {
     const r = current();
     if (!r) return;
+    if (r.kind === "port") return kind === "stop" ? killPort() : say(C.faint("ports take x (kill) and ⏎ (details)"));
     if (r.kind === "inst") {
       if (kind !== "stop") return say(C.faint("worktree instances only take x (kill)"));
       say(`killing ${r.i.key}…`);
@@ -240,8 +339,11 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
       if (k >= " " && k <= "~") { filter += k; build(); return render(); }
       return;
     }
+    // Any key other than a second x cancels a pending kill.
+    if (armed !== null && k !== "x") { armed = null; status = ""; }
     switch (k) {
       case "q": case "\x03": return quit();
+      case "p": return togglePorts();
       case "j": case ESC + "B": move(1); return render();
       case "k": case ESC + "A": move(-1); return render();
       case "g": sel = 0; move(1); return render();
@@ -259,6 +361,7 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
       case "\r": case "\n": {
         const r = current();
         if (!r) return;
+        if (r.kind === "port") return portDetail();
         const name = r.kind === "inst" ? r.i.key : r.s.name;
         if (logFor === name) { closeLogs(); return render(); }
         return openLogs(name);

@@ -102,18 +102,27 @@ service (it normally is `http://localhost:…`) and there is nothing else.
   natively: no /etc/hosts, no PAC file.
 - **Port conflicts, handled** — if something else holds the port, Start names
   the pid and offers to evict it.
-- **Every port on the machine** — the Ports panel lists everything listening,
-  not just what you configured: which service owns it, the full command, its
-  directory and parent, and a two-click kill. It's how you find the dev server
-  from three weeks ago that is squatting `:3000`.
+- **Every port on the machine** — everything listening, not just what you
+  configured: which service owns it, the full command, its directory and
+  parent, and a two-step kill. It's how you find the dev server from three
+  weeks ago squatting `:3000`. In the browser, in the TUI (`p`), and in the
+  terminal:
+
+  ```bash
+  stackdeck ports 3000     # who has it, since when, and from which directory
+  stackdeck kill 54211     # only pids holding a port; never root, never sudo
+  ```
 - **Databases without Docker** — detects Postgres, MySQL, MongoDB, Redis,
   Elasticsearch, RabbitMQ, NATS, MinIO, Temporal, ClickHouse and friends on
   your machine, and runs them as ordinary services with streamed logs.
 - **A terminal board too** — `stackdeck tui` gives you the same thing without
   leaving the terminal: navigate, start, kill, restart, filter, and stream
-  logs in a split pane. Same daemon, so the browser stays in sync.
-- **CLI and MCP** — `stackdeck status|start|stop|restart|logs <name>`, plus
-  `stackdeck mcp` so coding agents can drive your dev environment themselves.
+  logs in a split pane, plus `p` for the same port table. Same daemon, so the
+  browser stays in sync.
+- **CLI and MCP** — `stackdeck status|start|stop|restart|logs|ports|kill`, plus
+  `stackdeck mcp` so coding agents can drive your dev environment themselves,
+  including `whats_on_port` so an agent stops retrying a start that can never
+  bind.
 - **Themes** — calm, playful, austere, or a custom one you build from a few
   sliders in settings (a full light theme is one drag).
 

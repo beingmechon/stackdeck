@@ -9,6 +9,8 @@
  *   stackdeck stop <name>    stop a service
  *   stackdeck restart <name> restart a service
  *   stackdeck logs <name>    stream a service's logs (Ctrl-C to quit)
+ *   stackdeck ports [q]      every listening port, and who owns it
+ *   stackdeck kill <pid>     kill whatever is holding a port
  *   stackdeck tui            the same board, in the terminal
  *   stackdeck mcp            run an MCP server over stdio (for AI agents)
  *   stackdeck version|help
@@ -80,6 +82,10 @@ async function post(pathname, body) {
   return j;
 }
 
+const age = (s) => s == null ? "" :
+  s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + "m" :
+  s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
+
 function openBrowser(url) {
   const cmd = process.platform === "darwin" ? "open" : "xdg-open";
   try { execFileSync(cmd, [url], { stdio: "ignore" }); } catch { console.log(url); }
@@ -94,6 +100,10 @@ const USAGE = `stackdeck ${VERSION} — your projects folder, as a control panel
   stackdeck stop <name>     stop a service
   stackdeck restart <name>  restart a service
   stackdeck logs <name>     stream a service's logs (Ctrl-C to quit)
+
+  stackdeck ports [q]       every listening port on this machine, who owns it
+  stackdeck kill <pid>      kill whatever is holding a port
+
   stackdeck daemon          run the daemon in the foreground
   stackdeck mcp             run an MCP server over stdio (for AI agents)
 
@@ -136,6 +146,40 @@ Board: ${BASE}   ·   config and logs: ${stateHome()}`;
     await ensureDaemon();
     await post(`/api/${cmd}`, { name });
     console.log(`${name}: ${cmd} ok`);
+    return;
+  }
+  // "what has :3000?" is the question people leave a dashboard to answer, so it
+  // has to work without one: `stackdeck ports 3000` is the whole interaction.
+  if (cmd === "ports") {
+    await ensureDaemon();
+    const r = await fetch(`${BASE}/api/ports?fresh=1`, { headers: authHeaders() });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { console.error("error:", d.error || r.statusText); process.exit(1); }
+    const q = (name || "").toLowerCase();
+    const rows = q
+      ? d.ports.filter((p) => `${p.port} ${p.pid ?? ""} ${p.proc ?? ""} ${p.cmd ?? ""} ${p.owner ? p.owner.svc : ""}`.toLowerCase().includes(q))
+      : d.ports;
+    if (!rows.length) { console.log(q ? `nothing listening matches '${name}'` : "nothing is listening"); return; }
+    const home = os.homedir();
+    for (const p of rows) {
+      if (p.foreign) {
+        console.log(`:${String(p.port).padEnd(6)} ${"—".padEnd(8)} ${"another user".padEnd(14)} owned by root or another account — needs sudo`);
+        continue;
+      }
+      const tags = [p.owner ? p.owner.svc : "", p.system ? "system" : ""].filter(Boolean).join(" ");
+      console.log(
+        `:${String(p.port).padEnd(6)} ${String(p.pid).padEnd(8)} ${String(p.proc || "").slice(0, 13).padEnd(14)}` +
+        `${age(p.age).padStart(4)}  ${tags ? `[${tags}] ` : ""}${String(p.cmd || "").split(home).join("~").slice(0, 70)}`);
+    }
+    const foreign = rows.filter((p) => p.foreign).length;
+    console.error(`\n${rows.length} shown · ${foreign} owned by another user (Stackdeck runs as you)`);
+    return;
+  }
+  if (cmd === "kill") {
+    if (!name) { console.error("usage: stackdeck kill <pid>   (see: stackdeck ports)"); process.exit(1); }
+    await ensureDaemon();
+    const j = await post("/api/kill", { pid: Number(name) });
+    console.log(j.note || `killed pid ${name}${j.port ? ` on :${j.port}` : ""}${j.group ? " (and its process group)" : ""}`);
     return;
   }
   if (cmd === "logs") {
@@ -186,6 +230,14 @@ function runMcp() {
       inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
     { name: "get_logs", description: "Return the most recent log lines for a service (from its on-disk log).",
       inputSchema: { type: "object", properties: { name: { type: "string" }, lines: { type: "number", description: "default 100" } }, required: ["name"] } },
+    // An agent that can start services but cannot see why a port is taken will
+    // keep retrying a start that can never work. These close that loop.
+    { name: "list_ports", description: "Every listening TCP port on this machine, not just configured services: port, pid, process, full command, age, which Stackdeck service owns it, whether it is an OS process, and whether it belongs to another user (then it cannot be inspected or killed without sudo, which Stackdeck never uses).",
+      inputSchema: { type: "object", properties: { query: { type: "string", description: "optional filter over port, pid, process name and command" } } } },
+    { name: "whats_on_port", description: "What is holding a specific port, if anything. Use this before starting a service that failed to bind.",
+      inputSchema: { type: "object", properties: { port: { type: "number" } }, required: ["port"] } },
+    { name: "kill_pid", description: "Kill a process by pid. Only pids currently holding a listening port can be killed; the daemon's own pid and other users' processes are refused. Prefer stop_service when the pid belongs to a configured service.",
+      inputSchema: { type: "object", properties: { pid: { type: "number" } }, required: ["pid"] } },
   ];
   async function callTool(name, args) {
     if (name === "list_services") {
@@ -202,6 +254,35 @@ function runMcp() {
       const r = await fetch(`${BASE}/api/${ep}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ name: args.name, branch: args.branch }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d;
+    }
+    if (name === "list_ports" || name === "whats_on_port") {
+      const r = await fetch(`${BASE}/api/ports?fresh=1`, { headers: authHeaders() });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      const shape = (p) => p.foreign
+        ? { port: p.port, owner: "another user (root?)", killable: false,
+            note: "Stackdeck runs as you and cannot see or kill this without sudo" }
+        : { port: p.port, pid: p.pid, process: p.proc, command: p.cmd, ageSeconds: p.age,
+            service: p.owner ? p.owner.svc : null, serviceState: p.owner ? p.owner.kind : null,
+            operatingSystemProcess: !!p.system, boundToAllInterfaces: p.addrs.some((a) => /^(\*|0\.0\.0\.0|\[::\]):/.test(a)),
+            killable: !p.self, isStackdeckItself: !!p.self };
+      if (name === "whats_on_port") {
+        const hit = d.ports.filter((p) => p.port === Number(args.port));
+        return hit.length ? hit.map(shape) : { port: Number(args.port), free: true };
+      }
+      const q = String(args.query || "").toLowerCase();
+      return d.ports
+        .filter((p) => !q || `${p.port} ${p.pid ?? ""} ${p.proc ?? ""} ${p.cmd ?? ""}`.toLowerCase().includes(q))
+        .map(shape);
+    }
+    if (name === "kill_pid") {
+      const r = await fetch(`${BASE}/api/kill`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ pid: Number(args.pid) }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.statusText);
