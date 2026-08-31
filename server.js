@@ -263,12 +263,62 @@ function allListeners() {
         cmd: m.cmd || e.proc, ppid: m.ppid ?? null, pgid: m.pgid ?? null,
         age: m.age ?? null, rss: m.rss ?? null,
         self: e.pid === process.pid,
+        // Root-owned daemons can never be killed from here, but plenty of OS
+        // processes run as YOU (ControlCenter, sharingd, rapportd) and would go
+        // down like any dev server. Those need saying out loud, not blocking:
+        // they are your processes, and launchd generally brings them back.
+        system: isSystemPath(m.cmd || ""),
       });
     }
   }
+  /* lsof runs as you, so it can only see YOUR processes' sockets. A port held
+     by root (or another user) is simply absent — and a list that quietly omits
+     the thing you are hunting is worse than no list. netstat/ss need no
+     privileges to enumerate every listening port, so anything we could not
+     attribute gets a row that says so instead of vanishing. */
+  const seen = new Set(rows.map((r) => r.port));
+  for (const port of allListeningPorts())
+    if (!seen.has(port)) rows.push({
+      port, pid: null, proc: null, user: null, addrs: [], cmd: null,
+      ppid: null, pgid: null, age: null, rss: null, self: false, foreign: true,
+    });
+
   rows.sort((a, b) => a.port - b.port);
   portsCache = { t: Date.now(), rows };
   return rows;
+}
+
+// Shipped with the OS rather than with a project of yours. Path-based on
+// purpose: a name check would flag your own binary called "sharingd".
+const SYSTEM_PREFIXES = [
+  "/System/", "/usr/libexec/", "/usr/sbin/", "/usr/bin/", "/sbin/",
+  "/Library/Apple/", "/Library/PrivilegedHelperTools/", "/lib/systemd/", "/usr/lib/systemd/",
+];
+const isSystemPath = (cmd) => SYSTEM_PREFIXES.some((p) => cmd.startsWith(p));
+
+// Every listening TCP port, ownership aside. Unprivileged on both platforms.
+function allListeningPorts() {
+  const ports = new Set();
+  try { // macOS/BSD: "tcp4 0 0 127.0.0.1.8899 *.* LISTEN"
+    const out = execFileSync("netstat", ["-an", "-p", "tcp"], { timeout: 6000 }).toString();
+    for (const line of out.split("\n")) {
+      if (!/\bLISTEN\b/.test(line)) continue;
+      const m = line.trim().split(/\s+/)[3];
+      const p = m && Number(m.slice(m.lastIndexOf(".") + 1));
+      if (Number.isInteger(p) && p > 0) ports.add(p);
+    }
+  } catch {}
+  if (!ports.size) {
+    try { // Linux: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*"
+      const out = execFileSync("ss", ["-ltnH"], { timeout: 6000 }).toString();
+      for (const line of out.split("\n")) {
+        const m = line.trim().split(/\s+/)[3];
+        const p = m && Number(m.slice(m.lastIndexOf(":") + 1));
+        if (Number.isInteger(p) && p > 0) ports.add(p);
+      }
+    } catch {}
+  }
+  return ports;
 }
 function etimeSec(s) {
   const m = String(s).match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);

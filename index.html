@@ -1819,9 +1819,22 @@ function renderPorts() {
   el.innerHTML = rows.map((r) => {
     const open = portsExpanded.has(r.pid);
     const d = procDetail[r.pid];
+    // Held by root or another user: visible because netstat sees every port,
+    // but unattributable and unkillable without privileges Stackdeck never takes.
+    if (r.foreign) return `<div class="row">
+      <div class="row-main">
+        <span class="pnum">:${r.port}</span>
+        <span class="ppid">—</span>
+        <span class="pproc" style="font-weight:500; color:var(--faint)">another user</span>
+        <span class="grow cmdline">owned by root or another account — Stackdeck runs as you and cannot see or kill it</span>
+        <span class="badge plain">needs sudo</span>
+      </div>
+    </div>`;
+
     const owner = r.owner
       ? `<span class="badge ${r.owner.kind === "external" ? "ext" : "cfgd"}">${esc(r.owner.svc)}</span>`
       : "";
+    const sys = r.system ? `<span class="badge lan" title="part of the operating system, running as you">system</span>` : "";
     const lan = isLan(r.addrs) ? `<span class="badge lan" title="bound to every interface — reachable from your network">lan</span>` : "";
     const canOpen = !NON_HTTP.has(r.port);
     const act = r.self
@@ -1829,7 +1842,7 @@ function renderPorts() {
       : r.user && r.user !== portsData.me
         ? `<button class="ghost" disabled title="owned by ${esc(r.user)}, not you">kill</button>`
         : portArmed === r.pid
-          ? `<button class="kill" onclick="killPid(${r.pid})">confirm kill</button>`
+          ? `<button class="kill" onclick="killPid(${r.pid})" title="${r.system ? "this is an operating system process" : ""}">kill ${esc(r.proc || r.pid)}${r.system ? " (system)" : ""}</button>`
           : `<button class="ghost" onclick="armKill(${r.pid})">kill</button>`;
     return `<div class="row">
       <div class="row-main">
@@ -1837,7 +1850,7 @@ function renderPorts() {
         <span class="ppid">${r.pid}</span>
         <span class="pproc">${esc(r.proc || "?")}</span>
         <span class="grow cmdline" title="${esc(r.cmd)}">${esc(r.cmd)}</span>
-        ${owner}${lan}
+        ${owner}${sys}${lan}
         <span class="page" title="running for ${r.age == null ? "?" : r.age + " seconds"}">${ago(r.age)}</span>
         <div class="row-actions">
           <button class="ghost" aria-expanded="${open}" onclick="togglePortDetail(${r.pid})">details</button>
@@ -1863,7 +1876,12 @@ function portDetailHtml(r, d) {
   // The one squatter nobody guesses: macOS hands :5000 and :7000 to AirPlay.
   const airplay = /ControlCent(er|re)/i.test(r.proc || "") && (r.port === 5000 || r.port === 7000)
     ? `<div class="hint">This is macOS AirPlay Receiver, not a dev server. Turn it off in
-       System Settings → General → AirDrop &amp; Handoff to free :${r.port}.</div>` : "";
+       System Settings → General → AirDrop &amp; Handoff to free :${r.port}.</div>`
+    : r.system
+      ? `<div class="hint">Part of the operating system, running under your account — so it can be
+         killed, and launchd will usually start it again. Prefer turning the feature off in
+         System Settings to killing the process.</div>`
+      : "";
   return `<dl class="pdetail">${parts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}${airplay}</dl>`;
 }
 
