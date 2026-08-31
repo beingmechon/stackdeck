@@ -12,6 +12,23 @@ what shipped rather than what was written down at the time.
 
 Nothing yet.
 
+## [0.12.1] — 2026-09-01
+
+### Fixed
+- `isolateDb` never read the `.env` file, which is where essentially every
+  project keeps `DATABASE_URL` — so isolation refused to run on the first real
+  service it met, with "needs DATABASE_URL to exist". It now resolves the
+  source URL with the same precedence the service itself sees.
+- Restarting a worktree created a *second* database and orphaned the first.
+  The record is keyed by instance, so the new name overwrote the pointer and
+  the old database became unreferenced — teardown could never drop it. A
+  restart now reuses the branch's existing database, which is also what you
+  want: stop and start returns to your data.
+
+Both found by running `isolateDb` against a real Postgres for the first time;
+neither was reachable from the unit tests, which only covered the pure helpers
+underneath. The URL-precedence logic is now its own tested function.
+
 ## [0.12.0] — 2026-08-31
 
 ### Added
@@ -320,7 +337,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/beingmechon/stackdeck/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/beingmechon/stackdeck/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...v0.11.2
 [0.11.0]: https://github.com/beingmechon/stackdeck/compare/v0.10.3...v0.11.0

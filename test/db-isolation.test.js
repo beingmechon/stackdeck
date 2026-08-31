@@ -168,3 +168,52 @@ test("CREATE/DROP against a live Postgres", { skip: !hasPsql || !process.env.STA
      Skipped everywhere else rather than failing CI, which has no Postgres. */
   assert.ok(process.env.STACKDECK_TEST_PG.startsWith("postgres"), "opt-in URL should be a postgres URL");
 });
+
+/* ---------- where the source URL comes from ---------- */
+
+const { sourceDbUrl } = require("../server.js");
+
+test("the .env file is consulted — the regression that real Postgres caught", () => {
+  /* The first version looked in isolateDb.from, the service's env and
+     process.env, but NOT the .env file. That is where essentially every
+     project keeps DATABASE_URL, so isolation refused to run on the very
+     first real service it met. Unit tests could not catch it because they
+     only exercised the pure helpers below it. */
+  const s = { name: "api" };
+  const fileEnv = { DATABASE_URL: "postgres://localhost/app_dev" };
+  assert.strictEqual(sourceDbUrl(s, {}, fileEnv), "postgres://localhost/app_dev");
+});
+
+test("precedence matches what the service would actually connect with", () => {
+  // runtime env layering is: process.env < .env file < service env
+  const fromEnv = { DATABASE_URL: "postgres://localhost/from_process" };
+  const fileEnv = { DATABASE_URL: "postgres://localhost/from_dotenv" };
+  const svcEnv = { name: "api", env: { DATABASE_URL: "postgres://localhost/from_service" } };
+
+  const saved = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = fromEnv.DATABASE_URL;
+  try {
+    assert.strictEqual(sourceDbUrl({ name: "api" }, {}, {}), "postgres://localhost/from_process");
+    assert.strictEqual(sourceDbUrl({ name: "api" }, {}, fileEnv), "postgres://localhost/from_dotenv",
+      ".env must beat the daemon's own environment");
+    assert.strictEqual(sourceDbUrl(svcEnv, {}, fileEnv), "postgres://localhost/from_service",
+      "the service's own env must beat the .env");
+    assert.strictEqual(sourceDbUrl(svcEnv, { from: "postgres://localhost/explicit" }, fileEnv),
+      "postgres://localhost/explicit", "isolateDb.from must beat everything");
+  } finally {
+    if (saved === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = saved;
+  }
+});
+
+test("a custom urlVar is honoured everywhere", () => {
+  // Rails, Django and Prisma all differ, which is why urlVar exists.
+  const fileEnv = { DB_URL: "postgres://localhost/rails_dev", DATABASE_URL: "postgres://wrong" };
+  assert.strictEqual(sourceDbUrl({ name: "api" }, {}, fileEnv, "DB_URL"), "postgres://localhost/rails_dev");
+});
+
+test("nothing configured anywhere yields null, not a guess", () => {
+  const saved = process.env.DATABASE_URL;
+  delete process.env.DATABASE_URL;
+  try { assert.strictEqual(sourceDbUrl({ name: "api" }, {}, {}), null); }
+  finally { if (saved !== undefined) process.env.DATABASE_URL = saved; }
+});

@@ -1332,6 +1332,16 @@ function rewriteDbUrl(url, dbName) {
   } catch (e) { swallow("rewriteDbUrl", e); return null; }
 }
 
+/* The URL to copy FROM is whichever one the unbranched service would actually
+   have connected with, so this mirrors the runtime env precedence exactly:
+   daemon env < .env file < the service's own env, with isolateDb.from
+   overriding all of it. Pure, and separate, because getting it wrong is
+   silent — the first version skipped fileEnv, which is where essentially
+   every project keeps DATABASE_URL, so isolation simply refused to run. */
+function sourceDbUrl(s, opts = {}, fileEnv = {}, urlVar = "DATABASE_URL") {
+  return opts.from || (s.env || {})[urlVar] || fileEnv[urlVar] || process.env[urlVar] || null;
+}
+
 /* Which databases WE made. Only names in here are ever dropped, so a config
    change between create and teardown cannot turn a drop into someone else's
    production data. Keyed by instance so teardown needs no config at all. */
@@ -1364,13 +1374,13 @@ function psql(conn, sql) {
    means it fails whenever the app you are branching from is running. That is
    the common case, not the edge case, so the error says what to do about it
    rather than passing Postgres's wording through. */
-function isolateDb(s, branch, key) {
+function isolateDb(s, branch, key, fileEnv = {}) {
   const cfgIso = s.isolateDb;
   if (!cfgIso) return null;
   const opts = cfgIso === true ? {} : cfgIso;
   const urlVar = opts.urlVar || "DATABASE_URL";
-  const sourceUrl = opts.from || (s.env || {})[urlVar] || process.env[urlVar] || null;
-  if (!sourceUrl) return { error: `isolateDb needs ${urlVar} to exist — set it in the service's env or its .env` };
+  const sourceUrl = sourceDbUrl(s, opts, fileEnv, urlVar);
+  if (!sourceUrl) return { error: `isolateDb needs ${urlVar} to exist — set it in the service's env, its .env, or isolateDb.from` };
 
   let source;
   try { source = new URL(sourceUrl).pathname.replace(/^\//, ""); }
@@ -1385,6 +1395,13 @@ function isolateDb(s, branch, key) {
     return { error: `cannot reach Postgres at ${new URL(sourceUrl).host} — isolation was requested but the database is not reachable from here` };
 
   const record = readDbs();
+  /* This branch may already have one: stop-then-start must return to the same
+     data, not fork a second copy and orphan the first — an orphan is
+     unreferenced, so teardown could never drop it and the disk just grows. */
+  const existing = record[key];
+  if (existing && psql(admin, `SELECT 1 FROM pg_database WHERE datname = '${existing.db.replace(/'/g, "''")}'`).out.includes("1")) {
+    return { db: existing.db, url: rewriteDbUrl(sourceUrl, existing.db), urlVar, template: existing.db, reused: true };
+  }
   const taken = new Set(Object.values(record).map((r) => r.db));
   const db = pgIdent(s.name, branch, taken);
   const template = opts.template || source;
@@ -1656,11 +1673,13 @@ function startWorktree(s, branch) {
      data with an agent running migrations against it. */
   let dbEnv = {};
   if (s.isolateDb) {
-    const iso = isolateDb(s, branch, key);
+    const iso = isolateDb(s, branch, key, fileEnv);
     if (iso && iso.error) return { code: 409, error: `isolateDb: ${iso.error}` };
     if (iso) {
       dbEnv = { [iso.urlVar]: iso.url };
-      pushLog(key, `[stackdeck] own database '${iso.db}' (copied from '${iso.template}')\n`);
+      pushLog(key, iso.reused
+        ? `[stackdeck] own database '${iso.db}' (kept from the last run)\n`
+        : `[stackdeck] own database '${iso.db}' (copied from '${iso.template}')\n`);
     }
   }
   const child = spawn("bash", ["-c", s.command], {
@@ -2502,7 +2521,7 @@ if (!IS_MAIN) module.exports = {
   // worktree heavy-directory linking
   detectEcosystems, heavyDirsFor, linkHeavyDirs, excludeLinkedDirs, humanSize, HEAVY_DIRS,
   // per-worktree database isolation
-  pgIdent, rewriteDbUrl,
+  pgIdent, rewriteDbUrl, sourceDbUrl,
   parseWorktreeList,
   // readiness probing
   waitReadyFor, readyTimeout,
