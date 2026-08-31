@@ -222,6 +222,29 @@ you visit could start that service.
 Linux: run `stackdeck`, or add a systemd user unit for `node server.js`.
 </details>
 
+## Debugging
+
+Stackdeck swallows a lot of errors on purpose — a missing `.env`, an `lsof`
+that isn't installed, a pid that died between two lines. Any of those killing
+the board would be worse than the board carrying on without them. The cost is
+that when something doesn't work, nothing says why.
+
+Set `STACKDECK_DEBUG=1` and every swallowed error prints with the name of the
+operation that swallowed it:
+
+```bash
+STACKDECK_DEBUG=1 stackdeck daemon
+```
+
+```
+[stackdeck:which:postgres] Command failed: bash -c command -v postgres
+[stackdeck:parseEnvFile:/home/you/api/.env] ENOENT: no such file or directory
+```
+
+It changes nothing else — same behaviour, same exit codes, just louder. **Put
+this output in any bug report**; it is the single most useful thing for
+working out what happened on a machine that isn't mine.
+
 ## Status
 
 Early, but a solid daily driver — two files you can read in an evening, which

@@ -16,6 +16,17 @@
 // Last-resort guards: a bug on one request path must never kill the board.
 process.on("uncaughtException", (e) => console.error("uncaught exception:", e));
 process.on("unhandledRejection", (e) => console.error("unhandled rejection:", e));
+
+/* Most failures in this file are deliberately survivable: a missing .env, an
+   lsof that isn't installed, a pid that died between two lines. Swallowing
+   them keeps the board up, which is right — but swallowing them SILENTLY
+   left nothing to ask a user for when something didn't work. Every such
+   catch now names itself here. Off unless STACKDECK_DEBUG=1, and it never
+   changes what a catch returns. */
+const DEBUG = !!process.env.STACKDECK_DEBUG;
+function swallow(where, e) {
+  if (DEBUG) console.error(`[stackdeck:${where}] ${e && e.message ? e.message : e}`);
+}
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -25,7 +36,7 @@ const { spawn, execFileSync } = require("child_process");
 // Version comes from package.json so `npm version` is the single source of truth.
 const VERSION = (() => {
   try { return JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version; }
-  catch { return "unknown"; }
+  catch (e) { swallow("version:package.json", e); return "unknown"; }
 })();
 const ROOT = __dirname;
 
@@ -57,7 +68,7 @@ function resolveHome() {
   for (const legacy of [path.join(xdg, "devboard"), path.join(os.homedir(), ".devboard")]) {
     if (fs.existsSync(home) || !fs.existsSync(path.join(legacy, "config.json"))) continue;
     try { fs.mkdirSync(path.dirname(home), { recursive: true }); fs.renameSync(legacy, home); }
-    catch { return legacy; } // cross-device or permission issue: stay on the old path
+    catch (e) { swallow("resolveHome:migrate", e); return legacy; } // cross-device or permission issue: stay on the old path
   }
   return home;
 }
@@ -68,7 +79,7 @@ const LOG_DIR = path.join(HOME_DIR, "logs");
 // 0700: config holds env vars (often API keys) and logs hold whatever
 // services print — none of it is for other users on a shared machine.
 fs.mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
-try { fs.chmodSync(HOME_DIR, 0o700); fs.chmodSync(LOG_DIR, 0o700); } catch {}
+try { fs.chmodSync(HOME_DIR, 0o700); fs.chmodSync(LOG_DIR, 0o700); } catch (e) { swallow("startup:chmod-state-dir", e); }
 
 // Names end up in log-file paths and in the UI's inline handlers — the strict
 // charset (enforced at API *and* load time) is a security invariant, not taste.
@@ -106,7 +117,7 @@ const saveCfg = () => {
   fs.renameSync(tmp, CONFIG_PATH);
 };
 if (!fs.existsSync(CONFIG_PATH)) saveCfg();
-try { fs.chmodSync(CONFIG_PATH, 0o600); } catch {} // tighten pre-existing files too
+try { fs.chmodSync(CONFIG_PATH, 0o600); } catch (e) { swallow("startup:chmod-config", e); } // tighten pre-existing files too
 
 const findSvc = (name) => cfg.services.find((s) => s.name === name);
 const svcDir = (s) => expand(s.dir);
@@ -119,7 +130,7 @@ const svcDir = (s) => expand(s.dir);
 const crypto = require("crypto");
 const SECRET_PATH = path.join(HOME_DIR, "secret");
 let TOKEN = "";
-try { TOKEN = fs.readFileSync(SECRET_PATH, "utf8").trim(); } catch {}
+try { TOKEN = fs.readFileSync(SECRET_PATH, "utf8").trim(); } catch (e) { swallow("auth:read-secret", e); }
 if (!TOKEN || TOKEN.length < 32) {
   TOKEN = crypto.randomBytes(24).toString("hex");
   fs.writeFileSync(SECRET_PATH, TOKEN + "\n", { mode: 0o600 });
@@ -145,7 +156,7 @@ let SHELL_PATH = process.env.PATH;
 try {
   const cached = fs.readFileSync(SHELLPATH_CACHE, "utf8").trim();
   if (cached.split(":").length > 3) SHELL_PATH = cached;
-} catch {}
+} catch (e) { swallow("shellPath:read-cache", e); }
 (function refreshShellPath(i = 0) {
   if (NO_LISTEN) return; // library mode: never spawn an interactive shell
   const shell = process.env.SHELL || "/bin/bash";
@@ -158,7 +169,7 @@ try {
     if (m && m[1].split(":").length > 3) {
       SHELL_PATH = m[1];
       for (const k of Object.keys(WHICH_CACHE)) delete WHICH_CACHE[k]; // re-detect tools with the real PATH
-      try { fs.writeFileSync(SHELLPATH_CACHE, SHELL_PATH + "\n", { mode: 0o600 }); } catch {}
+      try { fs.writeFileSync(SHELLPATH_CACHE, SHELL_PATH + "\n", { mode: 0o600 }); } catch (e) { swallow("shellPath:write-cache", e); }
     } else refreshShellPath(i + 1);
   });
 })();
@@ -212,10 +223,10 @@ function listeningMap() {
   let map = new Map();
   try { // macOS + most Linux
     map = parseLsofPortPids(execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], { timeout: 4000 }).toString());
-  } catch {
+  } catch (eLsof) { swallow("listeningMap:lsof", eLsof);
     try { // Linux fallback (iproute2)
       map = parseSsPortPids(execFileSync("ss", ["-ltnpH"], { timeout: 4000 }).toString());
-    } catch {}
+    } catch (e) { swallow("listeningMap:ss", e); }
   }
   portCache = { t: Date.now(), map };
   return map;
@@ -291,10 +302,10 @@ function allListeners() {
   let byPid = new Map(); // pid -> { pid, proc, user, addrs: Map<port, Set<addr>> }
   try { // macOS + most Linux
     byPid = parseLsofListeners(execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-FpcLn"], { timeout: 6000 }).toString());
-  } catch {
+  } catch (eLsof) { swallow("allListeners:lsof", eLsof);
     try { // Linux fallback (iproute2)
       byPid = parseSsListeners(execFileSync("ss", ["-ltnpH"], { timeout: 6000 }).toString());
-    } catch {}
+    } catch (e) { swallow("allListeners:ss", e); }
   }
 
   // One ps for the full command line and age. `etime` rather than `lstart`
@@ -302,7 +313,7 @@ function allListeners() {
   let meta = new Map();
   try {
     meta = parsePsTable(execFileSync("ps", ["-Ao", "pid=,ppid=,pgid=,etime=,rss=,command="], { timeout: 6000 }).toString());
-  } catch {}
+  } catch (e) { swallow("allListeners:ps", e); }
 
   const rows = [];
   for (const e of byPid.values()) {
@@ -377,11 +388,11 @@ function allListeningPorts() {
   let ports = new Set();
   try { // macOS/BSD
     ports = parseNetstatPorts(execFileSync("netstat", ["-an", "-p", "tcp"], { timeout: 6000 }).toString());
-  } catch {}
+  } catch (e) { swallow("allListeningPorts:netstat", e); }
   if (!ports.size) {
     try { // Linux (iproute2)
       ports = parseSsPorts(execFileSync("ss", ["-ltnH"], { timeout: 6000 }).toString());
-    } catch {}
+    } catch (e) { swallow("allListeningPorts:ss", e); }
   }
   return ports;
 }
@@ -412,6 +423,8 @@ const clients = nul(); // name -> Set<res> (SSE)
    dev servers). Adopted services can't stream logs, but show as running and
    can be killed — same as any external process, minus the guesswork. */
 const PROCS_PATH = path.join(HOME_DIR, "procs.json");
+// Not swallow()d: the throw IS the answer ("no such process"), and this is
+// called on every poll for every service.
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const instances = nul(); // "svc@branch" -> { svc, branch, dir, port, startedAt, child? OR pid (adopted) }
 const extKills = nul();  // name -> { pid, at } — recently killed externals, to spot supervisor resurrection
@@ -425,7 +438,7 @@ try {
     if (v && Number.isInteger(v.pid) && alive(v.pid)) adopted[n] = v;
   for (const [k, v] of Object.entries(saved.instances || {}))
     if (v && Number.isInteger(v.pid) && alive(v.pid)) instances[k] = v; // adopted instance: pid, no child
-} catch {}
+} catch (e) { swallow("procs:load", e); }
 function saveProcs() {
   const out = { services: {}, instances: {} };
   for (const [n, p] of Object.entries(procs))
@@ -433,7 +446,7 @@ function saveProcs() {
   for (const [n, v] of Object.entries(adopted)) if (!(n in out.services) && alive(v.pid)) out.services[n] = v;
   for (const [k, i] of Object.entries(instances))
     if (instLive(i)) out.instances[k] = { pid: instPid(i), svc: i.svc, branch: i.branch, dir: i.dir, port: i.port, startedAt: i.startedAt, externalWorktree: !!i.externalWorktree };
-  try { fs.writeFileSync(PROCS_PATH, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 }); } catch {}
+  try { fs.writeFileSync(PROCS_PATH, JSON.stringify(out, null, 2) + "\n", { mode: 0o600 }); } catch (e) { swallow("procs:save", e); }
 }
 function adoptedPid(name) {
   const a = adopted[name];
@@ -463,7 +476,7 @@ function maybeRotate(name) {
       delete logStreams[name];
       fs.renameSync(f, `${f}.1`);
     }
-  } catch {}
+  } catch (e) { swallow("log:rotate", e); }
 }
 function pushLog(name, chunk) {
   const lines = chunk.toString().split("\n").filter((l) => l.length);
@@ -476,7 +489,7 @@ function pushLog(name, chunk) {
   if ((logWrites[name] = (logWrites[name] || 0) + 1) % 500 === 0) maybeRotate(name);
   notifyLogWaiters(name, lines); // readiness checks watch the live stream
   for (const res of clients[name] || []) {
-    try { for (const l of lines) res.write(`data: ${JSON.stringify(l)}\n\n`); } catch {}
+    try { for (const l of lines) res.write(`data: ${JSON.stringify(l)}\n\n`); } catch (e) { swallow("sse:write", e); }
   }
 }
 
@@ -549,7 +562,7 @@ function gitBranchFast(dir) {
     }
     const head = fs.readFileSync(path.join(g, "HEAD"), "utf8").trim();
     return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : "(detached)";
-  } catch { return null; }
+  } catch (e) { swallow("gitBranchFast", e); return null; }
 }
 
 /**
@@ -559,15 +572,15 @@ function gitBranchFast(dir) {
  */
 function inferCommand(dir) {
   const has = (f) => fs.existsSync(path.join(dir, f));
-  const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
+  const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch (e) { swallow(`inferCommand:read:${f}`, e); return ""; } };
   // Tolerant JSON: one malformed manifest must not abort the remaining
   // detectors. Parse as-is FIRST — comment-stripping breaks every URL
   // ("https://…") in valid JSON — and only fall back to stripping for
   // jsonc-style files.
   const jread = (f) => {
     const raw = read(f);
-    try { return JSON.parse(raw) || {}; } catch {}
-    try { return JSON.parse(raw.replace(/^\s*\/\/[^\n]*/gm, "")) || {}; } catch { return {}; }
+    try { return JSON.parse(raw) || {}; } catch {} // expected for jsonc; the retry below reports
+    try { return JSON.parse(raw.replace(/^\s*\/\/[^\n]*/gm, "")) || {}; } catch (e) { swallow(`inferCommand:json:${f}`, e); return {}; }
   };
   const DEV_TARGETS = ["dev", "start", "run", "serve", "up"];
   try {
@@ -625,7 +638,7 @@ function inferCommand(dir) {
     if (has("go.mod")) return "go run .";
     if (has("build.zig")) return "zig build run";
     if (has("Package.swift")) return "swift run";
-    if ([".csproj", ".fsproj"].some((ext) => { try { return fs.readdirSync(dir).some((f) => f.endsWith(ext)); } catch { return false; } }))
+    if ([".csproj", ".fsproj"].some((ext) => { try { return fs.readdirSync(dir).some((f) => f.endsWith(ext)); } catch (e) { swallow("inferCommand:dotnet-readdir", e); return false; } }))
       return "dotnet run";
 
     /* -- JVM ------------------------------------------------------------ */
@@ -657,7 +670,7 @@ function inferCommand(dir) {
     /* -- containers last: only when nothing language-level matched ----- */
     if (has("docker-compose.yml") || has("docker-compose.yaml") || has("compose.yml") || has("compose.yaml"))
       return "docker compose up";
-  } catch {}
+  } catch (e) { swallow("inferCommand", e); }
   return null;
 }
 
@@ -668,8 +681,8 @@ function inferCommand(dir) {
  */
 function detectProcs(dir) {
   const has = (f) => fs.existsSync(path.join(dir, f));
-  const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return ""; } };
-  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { return null; } };
+  const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch (e) { swallow(`detectProcs:read:${f}`, e); return ""; } };
+  const readJson = (f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch (e) { swallow(`detectProcs:json:${f}`, e); return null; } };
   const app = [];   // the repo's own processes
   const infra = []; // databases and brokers it declares
   try {
@@ -700,7 +713,7 @@ function detectProcs(dir) {
         try {
           return fs.readdirSync(path.join(dir, g.slice(0, -2)), { withFileTypes: true })
             .filter((e) => e.isDirectory()).map((e) => path.join(g.slice(0, -2), e.name));
-        } catch { return []; }
+        } catch (e) { swallow("detectProcs:workspace-glob", e); return []; }
       })() : [g];
       for (const rel of bases) {
         const wp = readJson(path.join(rel, "package.json"));
@@ -742,7 +755,7 @@ function detectProcs(dir) {
       }
       if (infra.length) break;
     }
-  } catch {}
+  } catch (e) { swallow("detectProcs", e); }
   // Compose usually covers the databases while the app runs on the host, so
   // both halves belong on the board. Compose-only names lose to app names.
   const seen = new Set(app.map((p) => p.name));
@@ -782,10 +795,12 @@ const SCAN_CONCURRENCY = 16;
    Awaiting a resolved promise would not do it — microtasks never let I/O in. */
 // fs.existsSync's async twin. A worktree's .git is a FILE, not a directory,
 // so this must be an existence check and not a stat-isDirectory one.
+// Not swallow()d, same reason as alive(): ENOENT is the routine answer, and
+// a scan asks this a couple of times per project.
 const exists = async (p) => { try { await fs.promises.access(p); return true; } catch { return false; } };
 const lsDirs = async (p) => {
   try { return (await fs.promises.readdir(p, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith(".")); }
-  catch { return []; }
+  catch (e) { swallow(`scanProjects:readdir:${p}`, e); return []; }
 };
 
 async function scanProjects() {
@@ -883,7 +898,7 @@ function which(bin) {
   try {
     WHICH_CACHE[bin] = execFileSync("bash", ["-c", `command -v ${bin}`],
       { env: { ...process.env, PATH: SHELL_PATH }, timeout: 3000 }).toString().trim() || null;
-  } catch { WHICH_CACHE[bin] = null; }
+  } catch (e) { swallow(`which:${bin}`, e); WHICH_CACHE[bin] = null; }
   return WHICH_CACHE[bin];
 }
 
@@ -906,7 +921,7 @@ function parseEnv(text) {
 // A missing or unreadable .env is normal, not an error: no file, no vars.
 function parseEnvFile(file) {
   try { return parseEnv(fs.readFileSync(file, "utf8")); }
-  catch { return {}; }
+  catch (e) { swallow(`parseEnvFile:${file}`, e); return {}; }
 }
 
 async function startService(s, branch, force) {
@@ -918,7 +933,7 @@ async function startService(s, branch, force) {
   bustPortCache(); // the busy check must not act on stale data
   let busy = portPid(s.port);
   if (busy && force) { // user confirmed: evict the squatter, then take the port
-    try { process.kill(busy, "SIGTERM"); } catch {}
+    try { process.kill(busy, "SIGTERM"); } catch (e) { swallow("startService:kill-squatter", e); }
     for (let i = 0; i < 15 && busy; i++) {
       await new Promise((ok) => setTimeout(ok, 200));
       bustPortCache();
@@ -1030,7 +1045,7 @@ async function waitReady(s, timeoutMs = 60000) {
   const rw = s.readyWhen || {};
   if (rw.log) {
     let regex;
-    try { regex = new RegExp(rw.log); } catch { return { ok: false, why: `bad readyWhen.log regex` }; }
+    try { regex = new RegExp(rw.log); } catch (e) { swallow("waitReady:bad-log-regex", e); return { ok: false, why: `bad readyWhen.log regex` }; }
     if ((buffers[s.name] || []).slice(-200).some((l) => regex.test(l))) return { ok: true };
     return await new Promise((resolve) => {
       const w = { regex, resolve: () => resolve({ ok: true }) };
@@ -1050,7 +1065,7 @@ async function waitReady(s, timeoutMs = 60000) {
           const req = mod.get(rw.http, { timeout: 2000 }, (r) => { r.resume(); resolve(r.statusCode < 400); });
           req.on("error", () => resolve(false));
           req.on("timeout", () => { req.destroy(); resolve(false); });
-        } catch { resolve(false); }
+        } catch (e) { swallow("waitReady:http", e); resolve(false); }
       });
       if (ok) return { ok: true };
       if (!(procs[s.name] && procs[s.name].child.exitCode === null)) return { ok: false, why: "process exited" };
@@ -1114,18 +1129,18 @@ async function stopService(s) {
   if (p && p.child.exitCode === null) {
     p.stopping = true; // suppresses crash notification + on-failure restart
     const child = p.child, pid = child.pid;
-    try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
+    try { process.kill(-pid, "SIGTERM"); } catch (eGrp) { swallow("stopService:sigterm-group", eGrp); try { process.kill(pid, "SIGTERM"); } catch (e) { swallow("stopService:sigterm", e); } }
     // Escalate only if OUR child is still alive — never fire a blind kill at a
     // pid that may have been reused by an unrelated process.
     setTimeout(() => {
-      if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch {} }
+      if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch (e) { swallow("stopService:sigkill", e); } }
     }, 5000).unref();
     return { code: 200, ok: true, stopped: pid };
   }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const adPid = adoptedPid(s.name);
   if (adPid) { // started by a previous daemon instance: we know its group
-    try { process.kill(-adPid, "SIGTERM"); } catch { try { process.kill(adPid, "SIGTERM"); } catch {} }
+    try { process.kill(-adPid, "SIGTERM"); } catch (eGrp) { swallow("stopService:adopted-sigterm-group", eGrp); try { process.kill(adPid, "SIGTERM"); } catch (e) { swallow("stopService:adopted-sigterm", e); } }
     delete adopted[s.name];
     saveProcs();
     bustPortCache();
@@ -1142,7 +1157,7 @@ async function stopService(s) {
     let now = ext;
     for (let i = 0; i < 8 && now === ext; i++) { await sleep(250); bustPortCache(); now = portPid(s.port); }
     if (now === ext) { // SIGTERM ignored — postgres, for one, "smart-waits"; SIGINT is its fast shutdown
-      try { process.kill(ext, "SIGINT"); } catch {}
+      try { process.kill(ext, "SIGINT"); } catch (e) { swallow("stopService:sigint", e); }
       for (let i = 0; i < 8 && now === ext; i++) { await sleep(250); bustPortCache(); now = portPid(s.port); }
     }
     if (now === ext)
@@ -1227,7 +1242,7 @@ function parsePgidTable(out) {
 }
 function pgidMap() {
   try { return parsePgidTable(execFileSync("ps", ["-Ao", "pid=,pgid="], { timeout: 4000 }).toString()); }
-  catch { return new Map(); }
+  catch (e) { swallow("pgidMap:ps", e); return new Map(); }
 }
 async function confirmInstancePort(key, pgid, asked) {
   for (let i = 0; i < 30; i++) {
@@ -1277,7 +1292,7 @@ function startWorktree(s, branch) {
       r = git(mainDir, "worktree", "add", wtDir, branch);
     }
     if (!r.ok) {
-      try { fs.rmdirSync(path.dirname(wtDir)); } catch {} // only removes if empty
+      try { fs.rmdirSync(path.dirname(wtDir)); } catch (e) { swallow("startWorktree:cleanup", e); } // only removes if empty
       return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
     }
   }
@@ -1330,7 +1345,7 @@ const readBody = (req) => new Promise((resolve) => {
     if (len > MAX_BODY) { resolve({}); req.destroy(); }
   });
   req.on("end", () => {
-    try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch { resolve({}); }
+    try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); } catch (e) { swallow("readBody:json", e); resolve({}); }
   });
   req.on("error", () => resolve({}));
 });
@@ -1470,10 +1485,10 @@ const handle = async (req, res) => {
     const i = instances[key];
     if (!i || !instLive(i)) return json(res, 404, { error: "no such running instance" });
     const pid = instPid(i);
-    try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
+    try { process.kill(-pid, "SIGTERM"); } catch (eGrp) { swallow("worktreeStop:sigterm-group", eGrp); try { process.kill(pid, "SIGTERM"); } catch (e) { swallow("worktreeStop:sigterm", e); } }
     if (i.child) {
       const child = i.child;
-      setTimeout(() => { if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch {} } }, 5000).unref();
+      setTimeout(() => { if (child.exitCode === null) { try { process.kill(-pid, "SIGKILL"); } catch (e) { swallow("worktreeStop:sigkill", e); } } }, 5000).unref();
     } else { delete instances[key]; saveProcs(); }
     return json(res, 200, { ok: true, stopped: pid });
   }
@@ -1530,12 +1545,12 @@ const handle = async (req, res) => {
       const out = execFileSync("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { timeout: 4000 }).toString();
       const m = out.split("\n").find((l) => l.startsWith("n"));
       if (m) cwd = m.slice(1);
-    } catch {}
+    } catch (e) { swallow("apiProc:lsof-cwd", e); }
     let parent = null;
     if (row && row.ppid > 1) {
       try {
         parent = { pid: row.ppid, cmd: execFileSync("ps", ["-p", String(row.ppid), "-o", "command="], { timeout: 4000 }).toString().trim() };
-      } catch {}
+      } catch (e) { swallow("apiProc:ps-parent", e); }
     }
     return json(res, 200, {
       pid, cwd, parent,
@@ -1579,7 +1594,7 @@ const handle = async (req, res) => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     for (let i = 0; i < 8 && alive(pid); i++) await sleep(250);
     if (alive(pid)) { // same ladder as an external service stop: SIGINT, then admit defeat
-      try { process.kill(group ? -pid : pid, "SIGINT"); } catch {}
+      try { process.kill(group ? -pid : pid, "SIGINT"); } catch (e) { swallow("apiKill:sigint", e); }
       for (let i = 0; i < 8 && alive(pid); i++) await sleep(250);
     }
     portsCache.t = 0;
@@ -1756,7 +1771,7 @@ const handle = async (req, res) => {
     // log follows too, so history doesn't split across two files.
     if (logStreams[name]) { logStreams[name].end(); delete logStreams[name]; }
     if (n !== name) {
-      try { fs.renameSync(path.join(LOG_DIR, `${name}.log`), path.join(LOG_DIR, `${n}.log`)); } catch {}
+      try { fs.renameSync(path.join(LOG_DIR, `${name}.log`), path.join(LOG_DIR, `${n}.log`)); } catch (e) { swallow("serviceRename:log-file", e); }
       for (const map of [procs, buffers, clients, adopted, logWrites])
         if (name in map) { map[n] = map[name]; delete map[name]; }
       saveProcs();
@@ -1775,7 +1790,7 @@ const handle = async (req, res) => {
       return json(res, 409, { error: "stop the service before editing it" });
     if (typeof b.dir !== "string" || b.dir.length > 512) return json(res, 400, { error: "bad dir" });
     let dirStat = null;
-    try { dirStat = fs.statSync(expand(b.dir.trim())); } catch {}
+    try { dirStat = fs.statSync(expand(b.dir.trim())); } catch (e) { swallow("apiService:stat-dir", e); }
     if (!dirStat || !dirStat.isDirectory()) return json(res, 400, { error: `not a directory: ${b.dir}` });
     if (typeof b.command !== "string" || b.command.length > 4096) return json(res, 400, { error: "bad command" });
     if (b.env !== undefined && !validEnv(b.env)) return json(res, 400, { error: "env must be a flat object of string values with valid names" });
@@ -1803,7 +1818,7 @@ const handle = async (req, res) => {
     if (b.readyWhen !== undefined) {
       const rw = b.readyWhen;
       if (rw && typeof rw === "object" && (typeof rw.log === "string" || typeof rw.http === "string")) {
-        if (typeof rw.log === "string") { try { new RegExp(rw.log); } catch { return json(res, 400, { error: "readyWhen.log is not a valid regex" }); } }
+        if (typeof rw.log === "string") { try { new RegExp(rw.log); } catch { return json(res, 400, { error: "readyWhen.log is not a valid regex" }); } } // reported to the caller, not swallowed
         if (typeof rw.http === "string" && rw.http && !/^https?:\/\//.test(rw.http))
           return json(res, 400, { error: "readyWhen.http must start with http:// or https://" });
         s.readyWhen = { ...(typeof rw.log === "string" && rw.log ? { log: rw.log } : {}), ...(typeof rw.http === "string" && rw.http ? { http: rw.http } : {}) };
@@ -1867,7 +1882,7 @@ const handle = async (req, res) => {
 const server = http.createServer({ maxHeaderSize: 262144 }, (req, res) => {
   handle(req, res).catch((e) => {
     console.error("request error:", e);
-    try { json(res, 500, { error: `internal error: ${e.message}` }); } catch {}
+    try { json(res, 500, { error: `internal error: ${e.message}` }); } catch (e) { swallow("handle:write-500", e); }
   });
 });
 
@@ -1954,7 +1969,7 @@ setInterval(() => {
     const since = Math.max(lastHit[s.name] || 0, rec.startedAt || 0);
     if (now - since < mins * 60000) continue;
     pushLog(s.name, `[stackdeck] idle for ${mins}m with no requests — stopping\n`);
-    stopService(s).catch(() => {});
+    stopService(s).catch((e) => swallow("idleStop", e));
   }
 }, 30000).unref();
 const proxy = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => {
@@ -1980,7 +1995,7 @@ const proxy = http.createServer({ maxHeaderSize: 262144 }, async (req, res) => {
     upRes.pipe(res);
   });
   up.on("timeout", () => up.destroy(new Error("upstream timed out")));
-  up.on("error", (e) => { try { res.writeHead(502, { "Content-Type": "text/plain" }); res.end(`stackdeck proxy: ${e.message}\n`); } catch {} });
+  up.on("error", (e) => { try { res.writeHead(502, { "Content-Type": "text/plain" }); res.end(`stackdeck proxy: ${e.message}\n`); } catch (e) { swallow("proxy:write-502", e); } });
   req.pipe(up);
 });
 proxy.on("upgrade", (req, socket, head) => {
