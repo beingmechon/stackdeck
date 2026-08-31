@@ -10,7 +10,17 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- A branch running in its own worktree now symlinks the heavy directories back
+  at your main checkout instead of copying them — `node_modules`, `target`,
+  `.venv`, `.next`, `vendor` and the rest, chosen from the ecosystems the repo
+  actually is rather than applied blindly. Five worktrees of a Node repo used
+  to mean five copies of `node_modules`.
+  Never links anything git tracks, never replaces something already in the
+  worktree, and never points outside the checkout. The linked names go into
+  `.git/info/exclude`, because a `.gitignore` written `node_modules/` does not
+  match a symlink and the worktree would otherwise show it as untracked.
+  `linkDirs: [...]` replaces the detected list; `linkDirs: false` turns it off.
 
 ## [0.10.3] — 2026-08-31
 

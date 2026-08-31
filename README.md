@@ -119,6 +119,12 @@ service (it normally is `http://localhost:…`) and there is nothing else.
   exits get a badge and a browser notification.
 - ***.localhost domains** — a built-in reverse proxy, WebSockets included.
   Browsers resolve `*.localhost` natively: no /etc/hosts, no PAC file.
+- **Worktrees that don't cost a gigabyte** — a branch running in its own
+  worktree symlinks `node_modules`, `target`, `.venv` and friends back at your
+  main checkout rather than copying them, picked from the ecosystems the repo
+  actually is. Never anything git tracks, never over something already there,
+  and the linked names go into `.git/info/exclude` so the worktree stays clean.
+  Override with `linkDirs: [...]`, or turn it off with `linkDirs: false`.
 - **Port conflicts, handled** — if something else holds the port, Start names
   the pid and offers to evict it.
 - **Ecosystem detection** — a run command inferred per project across ~15 of
@@ -164,6 +170,9 @@ Everything lives in `~/.config/stackdeck/config.json` (or
       "group": "Stack A",
       "dependsOn": ["db"],                     // started (and ready) first
       "readyWhen": { "log": "Listening on" },  // or { "http": "…" }; default: port opens
+      "linkDirs": ["node_modules"],            // symlink these into a worktree
+                                               // instead of copying; [] or omit
+                                               // to detect, false to disable
       "restart": "on-failure",                 // exponential backoff, 5 tries
       "onDemand": true,                        // boot it when api.localhost is visited
       "idleAfter": 30                          // stop it again after 30 idle minutes

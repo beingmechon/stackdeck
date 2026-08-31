@@ -689,6 +689,48 @@ function inferCommand(dir) {
   return null;
 }
 
+/* Which ecosystems a repo actually IS — all of them, not the first match.
+   inferCommand answers a different question ("how do I run this?") and stops
+   at the first hit, so a Makefile-driven Node repo returns "make dev" and
+   tells you nothing about node_modules. A repo can be Node and Rust at once,
+   and its heavy directories are the union of both. */
+const ECOSYSTEM_MARKERS = {
+  node:   ["package.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock", "package-lock.json"],
+  rust:   ["Cargo.toml"],
+  python: ["pyproject.toml", "requirements.txt", "Pipfile", "setup.py"],
+  go:     ["go.mod"],
+  java:   ["build.gradle", "build.gradle.kts", "gradlew", "pom.xml"],
+  php:    ["composer.json", "artisan"],
+};
+function detectEcosystems(dir) {
+  const found = new Set();
+  for (const [eco, markers] of Object.entries(ECOSYSTEM_MARKERS))
+    if (markers.some((m) => fs.existsSync(path.join(dir, m)))) found.add(eco);
+  return found;
+}
+
+/* Directories that are fetched or built rather than authored: identical across
+   branches, enormous, and reproducible from a manifest. Five worktrees of one
+   Node repo means five copies of node_modules. */
+const HEAVY_DIRS = {
+  node:   ["node_modules", ".next", ".nuxt", ".turbo", ".svelte-kit", ".angular", "dist", "build"],
+  rust:   ["target"],
+  python: [".venv", "venv", "__pycache__"],
+  go:     ["vendor"],
+  java:   [".gradle", "build"],
+  php:    ["vendor"],
+};
+// The union, deduped: "build" is both Node and Java, "vendor" both Go and PHP.
+const heavyDirsFor = (dir) =>
+  [...new Set([...detectEcosystems(dir)].flatMap((e) => HEAVY_DIRS[e] || []))];
+
+const humanSize = (bytes) => {
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes, i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${u[i]}`;
+};
+
 /**
  * Multi-process repos: a Procfile, docker-compose services, or pnpm workspace
  * packages mean one repo is really several services. Returns [{name, command,
@@ -1219,6 +1261,111 @@ function sanitizeBranch(branch) {
   return safe === "." || safe === ".." || safe.startsWith("-") ? "" : safe;
 }
 
+/* Symlink a new worktree's heavy directories back at the main checkout, so a
+   branch costs a checkout rather than another node_modules. A reported case
+   put five worktrees at 9.82 GB in twenty minutes.
+
+   Everything below is a refusal, and every refusal runs before any link is
+   made. The tracked-directory check is the one that matters: symlinking
+   something git tracks shows the worktree as permanently dirty and invites a
+   committed symlink into the repo, which is far worse than a wasted gigabyte.
+
+   A directory that cannot be linked is never fatal. A worktree that starts
+   without symlinks is fine; a worktree that fails to start is not. */
+function linkHeavyDirs(s, mainDir, wtDir) {
+  const linked = [], skipped = [];
+  const skip = (dir, why) => skipped.push({ dir, why });
+
+  if (s.linkDirs === false) return { linked, skipped, disabled: true };
+  // An explicit list replaces detection outright — the user knows their repo.
+  const dirs = Array.isArray(s.linkDirs) ? s.linkDirs.filter((d) => typeof d === "string" && d)
+                                         : heavyDirsFor(mainDir);
+  if (!dirs.length) return { linked, skipped };
+
+  // realpath first: a checkout reached through a symlink must not let a
+  // relative candidate aim the link somewhere outside it.
+  let mainRoot, wtRoot;
+  try { mainRoot = fs.realpathSync(mainDir); wtRoot = fs.realpathSync(wtDir); }
+  catch (e) { swallow("linkHeavyDirs:realpath", e); return { linked, skipped }; }
+
+  for (const rel of dirs) {
+    try {
+      const src = path.resolve(mainRoot, rel);
+      const dst = path.resolve(wtRoot, rel);
+      // Confine both ends. Catches linkDirs: ["../../.ssh"] and friends.
+      if (!src.startsWith(mainRoot + path.sep)) { skip(rel, "outside the checkout"); continue; }
+      if (!dst.startsWith(wtRoot + path.sep)) { skip(rel, "outside the worktree"); continue; }
+
+      // Tracked by git: never. `--` so a candidate cannot arrive as a flag.
+      if (git(mainRoot, "ls-files", "--error-unmatch", "--", rel).ok) { skip(rel, "tracked by git"); continue; }
+
+      // lstat, not stat: a symlink in the main checkout fails isDirectory()
+      // here, which is what we want — we link real directories only.
+      let st = null;
+      try { st = fs.lstatSync(src); } catch { skip(rel, "not in the main checkout"); continue; }
+      if (!st.isDirectory()) { skip(rel, "not a plain directory"); continue; }
+
+      // Anything already at the destination wins. Never clobber.
+      try { fs.lstatSync(dst); skip(rel, "already in the worktree"); continue; } catch {}
+
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.symlinkSync(src, dst, "dir"); // "dir" matters on Windows, harmless elsewhere
+      linked.push(rel);
+    } catch (e) {
+      swallow(`startWorktree:link:${rel}`, e);
+      skip(rel, "could not be linked");
+    }
+  }
+  // Keep the worktree clean: a symlink git can see but does not ignore is a
+  // symlink somebody eventually commits.
+  const excluded = excludeLinkedDirs(mainRoot, linked);
+  return { linked, skipped, excluded };
+}
+
+/* A .gitignore written "node_modules/" — the common form, and what npm's own
+   template ships — does NOT match a SYMLINK named node_modules. So the linked
+   worktree shows `?? node_modules` and a `git add -A` would commit the link,
+   which is the exact outcome the tracked-directory rule exists to prevent.
+
+   git has no per-worktree exclude (verified: every worktree reads the shared
+   .git/info/exclude), so the names go there. That file is the personal,
+   never-committed ignore list and exists for precisely this. It is safe to
+   write because nothing reaches here that git tracks — rule 3 already
+   refused those — so an added line can never hide real content. Idempotent,
+   and marked so it is obvious what wrote it. */
+const EXCLUDE_MARK = "# stackdeck: worktree symlinks (safe to delete)";
+function excludeLinkedDirs(mainRoot, dirs) {
+  if (!dirs.length) return [];
+  try {
+    const common = git(mainRoot, "rev-parse", "--git-common-dir").out || ".git";
+    const file = path.resolve(mainRoot, common, "info", "exclude");
+    let cur = "";
+    try { cur = fs.readFileSync(file, "utf8"); } catch (e) { swallow("linkHeavyDirs:read-exclude", e); }
+    const have = new Set(cur.split("\n").map((l) => l.trim()));
+    const add = dirs.filter((d) => !have.has(d));
+    if (!add.length) return [];
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${cur && !cur.endsWith("\n") ? "\n" : ""}${EXCLUDE_MARK}\n${add.join("\n")}\n`);
+    return add;
+  } catch (e) { swallow("linkHeavyDirs:exclude", e); return []; }
+}
+
+/* What the links saved, reported AFTER the fact. du walks the whole tree, and
+   nothing about starting a worktree should wait on that — same reason
+   confirmInstancePort runs on its own. */
+function reportLinkSavings(key, mainDir, dirs) {
+  if (!dirs.length) return;
+  execFile("du", ["-sk", ...dirs.map((d) => path.join(mainDir, d))], { timeout: 30000 }, (err, out) => {
+    if (err) return swallow("linkHeavyDirs:du", err);
+    let kb = 0;
+    for (const line of String(out || "").split("\n")) {
+      const m = line.match(/^\s*(\d+)\s/);
+      if (m) kb += Number(m[1]);
+    }
+    if (kb > 0) pushLog(key, `[stackdeck] ${humanSize(kb * 1024)} not copied — ${dirs.join(", ")} point at the main checkout\n`);
+  });
+}
+
 function freePortFrom(base, allow) {
   bustPortCache();
   const taken = new Set(listeningMap().keys());
@@ -1299,6 +1446,7 @@ function startWorktree(s, branch) {
   // module-level map of services inherited from a previous daemon, and a
   // local of the same name here would shadow it for anything added later.
   let externalWorktree = false;
+  let links = { linked: [], skipped: [] };
   if (existing && path.resolve(existing) !== path.resolve(wtDir) && fs.existsSync(existing)) {
     wtDir = existing; // someone else's worktree for this branch: run it where it lives
     externalWorktree = true;
@@ -1313,6 +1461,9 @@ function startWorktree(s, branch) {
       try { fs.rmdirSync(path.dirname(wtDir)); } catch (e) { swallow("startWorktree:cleanup", e); } // only removes if empty
       return { code: 500, error: `git worktree add: ${r.out.split("\n").pop()}` };
     }
+    // Only into worktrees we just made. Writing symlinks into a directory
+    // another tool created and is working in is not ours to do.
+    links = linkHeavyDirs(s, mainDir, wtDir);
   }
   // With the main copy stopped there is nothing to run in parallel with, so the
   // branch takes the service's real port and the rest of your stack reaches it
@@ -1343,10 +1494,14 @@ function startWorktree(s, branch) {
   instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now(), externalWorktree };
   saveProcs();
   confirmInstancePort(key, child.pid, port); // $PORT is a request, not a guarantee
+  if (links.linked.length) {
+    pushLog(key, `[stackdeck] linked from the main checkout: ${links.linked.join(", ")}\n`);
+    reportLinkSavings(key, mainDir, links.linked); // du is slow; it reports when it can
+  }
   // shorten $HOME in the banner — log panes end up in screenshots and screen shares
   const wtShort = wtDir.startsWith(os.homedir()) ? "~" + wtDir.slice(os.homedir().length) : wtDir;
   pushLog(key, `[stackdeck] ${externalWorktree ? "existing worktree (made outside Stackdeck)" : "worktree instance"}: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtShort}\n`);
-  return { code: 200, ok: true, key, port, pid: child.pid, externalWorktree };
+  return { code: 200, ok: true, key, port, pid: child.pid, externalWorktree, links };
 }
 
 /* ---------- http ---------- */
@@ -1833,6 +1988,18 @@ const handle = async (req, res) => {
     s.dir = b.dir.trim(); s.command = b.command.trim();
     s.port = b.port;
     s.env = b.env !== undefined ? b.env : (s.env || {});
+    if (b.linkDirs !== undefined) { // false disables linking; an array replaces detection
+      if (b.linkDirs === false) s.linkDirs = false;
+      else if (Array.isArray(b.linkDirs)) {
+        // Relative, single-segment-or-deeper paths only. A leading "/" or a ".."
+        // is rejected here as well as at link time — cheap, and the error is
+        // visible to whoever typed it instead of silently skipped later.
+        const bad = b.linkDirs.find((d) => typeof d !== "string" || !d || path.isAbsolute(d) ||
+          d.split(/[\\/]/).includes("..") || d.length > 255);
+        if (bad !== undefined) return json(res, 400, { error: `bad linkDirs entry: ${JSON.stringify(bad)}` });
+        if (b.linkDirs.length) s.linkDirs = b.linkDirs; else delete s.linkDirs;
+      } else delete s.linkDirs;
+    }
     if (b.envFile !== undefined) { // false disables .env auto-load; string picks a file
       if (b.envFile === false || typeof b.envFile === "string") s.envFile = b.envFile;
       else delete s.envFile;
@@ -2079,4 +2246,6 @@ if (!IS_MAIN) module.exports = {
   etimeSec,
   // project discovery
   gitBranchFast, inferCommand, detectProcs,
+  // worktree heavy-directory linking
+  detectEcosystems, heavyDirsFor, linkHeavyDirs, excludeLinkedDirs, humanSize, HEAVY_DIRS,
 };
