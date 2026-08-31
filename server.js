@@ -1097,27 +1097,42 @@ function notifyLogWaiters(name, lines) {
     }
   }
 }
-async function waitReady(s, timeoutMs = 60000) {
+const READY_TIMEOUT_MS = 60000;
+
+/* Readiness, decoupled from "a service". A worktree instance has its own log
+   stream, its own port and its own liveness, and an agent that can start one
+   but cannot wait for it is back to sleeping in a loop — which is the whole
+   reason this exists. So the probe takes what it needs rather than reaching
+   for module state, which also makes it testable against a throwaway server. */
+async function waitReadyFor({ readyWhen, logKey, port, alive }, timeoutMs = READY_TIMEOUT_MS) {
   const until = Date.now() + timeoutMs;
-  const rw = s.readyWhen || {};
+  const rw = readyWhen || {};
+  const exited = () => (typeof alive === "function" && !alive());
+
   if (rw.log) {
     let regex;
     try { regex = new RegExp(rw.log); } catch (e) { swallow("waitReady:bad-log-regex", e); return { ok: false, why: `bad readyWhen.log regex` }; }
-    if ((buffers[s.name] || []).slice(-200).some((l) => regex.test(l))) return { ok: true };
+    // Already in the buffer: a fast service can be ready before we look.
+    if ((buffers[logKey] || []).slice(-200).some((l) => regex.test(l))) return { ok: true };
+    // Reuse the live stream rather than opening a second reader — pushLog
+    // notifies these waiters as lines arrive.
     return await new Promise((resolve) => {
       const w = { regex, resolve: () => resolve({ ok: true }) };
-      (readyWaiters[s.name] = readyWaiters[s.name] || []).push(w);
+      (readyWaiters[logKey] = readyWaiters[logKey] || []).push(w);
       setTimeout(() => {
-        const ws = readyWaiters[s.name] || [];
+        const ws = readyWaiters[logKey] || [];
         const i = ws.indexOf(w);
         if (i >= 0) { ws.splice(i, 1); resolve({ ok: false, why: "log pattern not seen in time" }); }
       }, timeoutMs).unref();
     });
   }
+
   if (rw.http) {
     while (Date.now() < until) {
       const ok = await new Promise((resolve) => {
         try {
+          // http.get does not follow redirects, and carries no Stackdeck
+          // token — this is the user's own URL, not our API.
           const mod = rw.http.startsWith("https:") ? require("https") : http;
           const req = mod.get(rw.http, { timeout: 2000 }, (r) => { r.resume(); resolve(r.statusCode < 400); });
           req.on("error", () => resolve(false));
@@ -1125,23 +1140,34 @@ async function waitReady(s, timeoutMs = 60000) {
         } catch (e) { swallow("waitReady:http", e); resolve(false); }
       });
       if (ok) return { ok: true };
-      if (!(procs[s.name] && procs[s.name].child.exitCode === null)) return { ok: false, why: "process exited" };
+      if (exited()) return { ok: false, why: "process exited" };
       await new Promise((r) => setTimeout(r, 500));
     }
     return { ok: false, why: "http check never passed" };
   }
-  if (s.port) {
+
+  if (port) {
     while (Date.now() < until) {
       bustPortCache();
-      if (portPid(s.port)) return { ok: true };
-      if (!(procs[s.name] && procs[s.name].child.exitCode === null)) return { ok: false, why: "process exited" };
+      if (portPid(port)) return { ok: true };
+      if (exited()) return { ok: false, why: "process exited" };
       await new Promise((r) => setTimeout(r, 500));
     }
-    return { ok: false, why: `port ${s.port} never opened` };
+    return { ok: false, why: `port ${port} never opened` };
   }
+
   await new Promise((r) => setTimeout(r, 1000)); // no signal at all: brief grace
   return { ok: true };
 }
+
+// 1s-10min, so a caller cannot ask the daemon to hold a request forever.
+const readyTimeout = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 1 && n <= 600 ? Math.round(n) * 1000 : READY_TIMEOUT_MS;
+};
+const svcAlive = (name) => () => !!(procs[name] && procs[name].child.exitCode === null);
+const waitReady = (s, timeoutMs) => waitReadyFor(
+  { readyWhen: s.readyWhen, logKey: s.name, port: s.port, alive: svcAlive(s.name) }, timeoutMs);
 
 /* Dependency-ordered startup: topo-sort dependsOn, start each level, wait for
    readiness before starting dependents. Cycles fail loudly. */
@@ -1704,11 +1730,21 @@ const handle = async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/api/worktree/start") {
-    const { name, branch } = await readBody(req);
+    const b = await readBody(req);
+    const { name, branch } = b;
     const s = findSvc(name);
     if (!s) return json(res, 404, { error: "unknown service" });
     if (typeof branch !== "string" || !branch) return json(res, 400, { error: "branch required" });
     const r = startWorktree(s, branch);
+    // Same deal for a branch instance, keyed on its own log stream and the
+    // port it was actually given rather than the service's.
+    if (r.code === 200 && b.waitForReady) {
+      const ready = await waitReadyFor(
+        { readyWhen: s.readyWhen, logKey: r.key, port: r.port,
+          alive: () => !!(instances[r.key] && instLive(instances[r.key])) },
+        readyTimeout(b.timeoutSeconds));
+      return json(res, 200, { ...r, ready: ready.ok, ...(ready.ok ? {} : { notReady: ready.why }) });
+    }
     return json(res, r.code, r);
   }
 
@@ -1847,7 +1883,8 @@ const handle = async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/api/start") {
-    const { name, branch, force } = await readBody(req);
+    const b = await readBody(req);
+    const { name, branch, force } = b;
     const s = findSvc(name);
     if (!s) return json(res, 404, { error: "unknown service" });
     if (Array.isArray(s.dependsOn) && s.dependsOn.length) {
@@ -1856,6 +1893,17 @@ const handle = async (req, res) => {
       if (failed) return json(res, 409, { error: `dependency '${failed[0]}': ${failed[1].error}` });
     }
     const r = await startService(s, branch, force === true);
+    /* "Started" means the process spawned, which is not the same as serving.
+       A caller that asks to wait gets held until the readyWhen condition holds
+       or the timeout expires — and on timeout the service is LEFT RUNNING and
+       reported as not ready, because the logs are usually the thing you
+       actually wanted to look at. */
+    if (r.code === 200 && b.waitForReady) {
+      const ready = await waitReadyFor(
+        { readyWhen: s.readyWhen, logKey: s.name, port: s.port, alive: svcAlive(s.name) },
+        readyTimeout(b.timeoutSeconds));
+      return json(res, 200, { ...r, ready: ready.ok, ...(ready.ok ? {} : { notReady: ready.why }) });
+    }
     return json(res, r.code, r);
   }
 
@@ -2296,4 +2344,6 @@ if (!IS_MAIN) module.exports = {
   // worktree heavy-directory linking
   detectEcosystems, heavyDirsFor, linkHeavyDirs, excludeLinkedDirs, humanSize, HEAVY_DIRS,
   parseWorktreeList,
+  // readiness probing
+  waitReadyFor, readyTimeout,
 };

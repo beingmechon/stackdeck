@@ -29,6 +29,13 @@ what shipped rather than what was written down at the time.
   not clean up a directory another agent is working in.
 - `GET /api/worktrees?name=<service>` behind it, listing worktrees with their
   provenance and whether anything is serving them.
+- MCP `start_service` and `start_worktree` wait until the thing is actually
+  SERVING before they return, not merely spawned — `waitForReady`, on by
+  default, with `timeoutSeconds` (1-600, default 60). The reply says
+  `ready: true`, or `ready: false` with the reason. On timeout the service is
+  left running, because its logs are usually what you wanted. Every agent
+  integration was otherwise reimplementing the same sleep loop.
+  `POST /api/start` and `POST /api/worktree/start` accept the same two fields.
 
 ## [0.10.3] — 2026-08-31
 

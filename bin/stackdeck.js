@@ -239,8 +239,10 @@ function runMcp() {
   const TOOLS = [
     { name: "list_services", description: "List all Stackdeck services with running state, port, pid, git branch, and dirty flag.",
       inputSchema: { type: "object", properties: {} } },
-    { name: "start_service", description: "Start a service by name (starts its dependencies first). Optional branch to check out.",
-      inputSchema: { type: "object", properties: { name: { type: "string" }, branch: { type: "string" } }, required: ["name"] } },
+    { name: "start_service", description: "Start a service by name (starts its dependencies first). Optional branch to check out. By default returns only once the service is actually SERVING, not merely spawned — no sleep loop needed. The reply carries ready:true, or ready:false with notReady saying why; either way the service is left running.",
+      inputSchema: { type: "object", properties: { name: { type: "string" }, branch: { type: "string" },
+        waitForReady: { type: "boolean", description: "wait until it is serving (default true)" },
+        timeoutSeconds: { type: "number", description: "how long to wait, 1-600 (default 60)" } }, required: ["name"] } },
     { name: "stop_service", description: "Stop (kill) a service by name.",
       inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
     { name: "restart_service", description: "Restart a service by name.",
@@ -258,8 +260,10 @@ function runMcp() {
        it had just made a worktree for. */
     { name: "list_worktrees", description: "Every git worktree of a service's repository, wherever it lives on disk and whatever created it — including ones you or another tool made. Says which are running under Stackdeck, on what port, and which Stackdeck created; only those can be removed by it.",
       inputSchema: { type: "object", properties: { name: { type: "string", description: "service name" } }, required: ["name"] } },
-    { name: "start_worktree", description: "Run a branch of a service in its own git worktree, in parallel with the main checkout, on its own port. Adopts an existing worktree for that branch rather than creating a second. Heavy directories (node_modules, target, .venv) are symlinked from the main checkout, not copied.",
-      inputSchema: { type: "object", properties: { name: { type: "string", description: "service name" }, branch: { type: "string" } }, required: ["name", "branch"] } },
+    { name: "start_worktree", description: "Run a branch of a service in its own git worktree, in parallel with the main checkout, on its own port. Adopts an existing worktree for that branch rather than creating a second. Heavy directories (node_modules, target, .venv) are symlinked from the main checkout, not copied. Like start_service, it waits until the branch is actually serving by default.",
+      inputSchema: { type: "object", properties: { name: { type: "string", description: "service name" }, branch: { type: "string" },
+        waitForReady: { type: "boolean", description: "wait until it is serving (default true)" },
+        timeoutSeconds: { type: "number", description: "how long to wait, 1-600 (default 60)" } }, required: ["name", "branch"] } },
     { name: "stop_worktree", description: "Stop a running worktree instance by its key (the \"service@branch\" form returned by list_worktrees or start_worktree). Stops the process; the worktree stays on disk.",
       inputSchema: { type: "object", properties: { key: { type: "string", description: "service@branch" } }, required: ["key"] } },
     { name: "kill_pid", description: "Kill a process by pid. Only pids currently holding a listening port can be killed; the daemon's own pid and other users' processes are refused. Prefer stop_service when the pid belongs to a configured service.",
@@ -277,9 +281,15 @@ function runMcp() {
     }
     if (["start_service", "stop_service", "restart_service"].includes(name)) {
       const ep = { start_service: "start", stop_service: "stop", restart_service: "restart" }[name];
+      // Waiting is the DEFAULT: an agent that gets "started" and immediately
+      // makes a request is the bug this closes.
+      const body = name === "start_service"
+        ? { name: args.name, branch: args.branch,
+            waitForReady: args.waitForReady !== false, timeoutSeconds: args.timeoutSeconds }
+        : { name: args.name, branch: args.branch };
       const r = await fetch(`${BASE}/api/${ep}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ name: args.name, branch: args.branch }),
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.statusText);
@@ -301,7 +311,10 @@ function runMcp() {
     }
     if (name === "start_worktree" || name === "stop_worktree") {
       const ep = name === "start_worktree" ? "start" : "stop";
-      const body = name === "start_worktree" ? { name: args.name, branch: args.branch } : { key: args.key };
+      const body = name === "start_worktree"
+        ? { name: args.name, branch: args.branch,
+            waitForReady: args.waitForReady !== false, timeoutSeconds: args.timeoutSeconds }
+        : { key: args.key };
       const r = await fetch(`${BASE}/api/worktree/${ep}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(body),

@@ -143,6 +143,8 @@ service (it normally is `http://localhost:…`) and there is nothing else.
   `whats_on_port` stops an agent retrying a start that can never bind, and
   `list_worktrees` / `start_worktree` / `stop_worktree` let it run the branch
   it just made — including a worktree it created itself, anywhere on disk.
+  Both start tools wait until the service is actually serving before they
+  return, so an agent never has to guess with a sleep loop.
 - **Themes** — calm, playful, austere, or a custom one built from a few
   sliders (a full light theme is one drag).
 
