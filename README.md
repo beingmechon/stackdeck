@@ -52,7 +52,7 @@ no `stackdeck` command on your PATH afterwards.
     ● ⧉ feature/rate-limits :3002   71874   worktree
   ○ studio                :5173           pnpm run dev
  ─────────────────────────────────────────────────────────────────────
- ↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  o open  q quit
+ ↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  p ports  o open  q quit
 ```
 
 ## The three things it does that other process managers don't
@@ -89,9 +89,13 @@ machine, and it all works on a plane.
 Verify it yourself in one command while it's running:
 
 ```bash
-lsof -nP -a -p "$(pgrep -f 'stackdeck|server.js' | head -1)" -i
+lsof -nP -a -p "$(lsof -ti tcp:8899 -sTCP:LISTEN)" -i
 # only 127.0.0.1:<port> (LISTEN), plus loopback connections to your services
 ```
+
+(Ask it by the port it listens on, not by name — `pgrep -f server.js` also
+matches your editor's helper processes. On a distro without `lsof`, the same
+answer comes from `ss -tnp | grep "pid=$(pgrep -f 'node.*server\.js')"`.)
 
 The single exception is a URL you type: `readyWhen: { "http": "…" }` fetches
 exactly that address to decide when a service is ready. Point it at your own

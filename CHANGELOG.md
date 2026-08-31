@@ -28,13 +28,27 @@ what shipped rather than what was written down at the time.
   daemon stopped answering — logs, ports, start and kill — for the length of
   a scan. Measured on 400 projects: the board went from serving 2 requests
   during a scan to 22–28.
+- WSL2 audited and documented. Every path that needs a macOS tool already
+  fell back to one WSL2 has, so it is expected to work; `*.localhost`
+  proxying there is untested and the README says so rather than claiming it.
 - The project list is cached for 5 minutes instead of 30 seconds. Every
   change you make through Stackdeck already refreshes it immediately; the
   Projects panel's ↻ refresh is there for a repo you cloned elsewhere.
 
 ### Fixed
 - A branch name shaped like a command-line option can no longer reach `git`
-  as one.
+  as one. `--end-of-options` now separates every branch operand, and the
+  worktree-name sanitizer refuses anything starting with a dash.
+- `stackdeck` and the TUI's `o` key now open the board on WSL2, through
+  `wslview` or `explorer.exe`. `xdg-open` is usually absent there and opens
+  nothing when present, because the browser is on the Windows side.
+- The "prove it never talks to the internet" command in the README and on the
+  landing page selected the wrong process: `pgrep -f 'stackdeck|server.js'`
+  also matches editor helper processes, and `head -1` picked the lowest pid.
+  It now finds the daemon by the port it listens on.
+- Two locals that shadowed module-level maps (`adopted` in `startWorktree`,
+  `procs` in `detectProcs`) renamed. Both were latent, and both are the
+  collision that killed the TUI on launch in 0.10.0.
 
 ## [0.10.0] — 2026-08-31
 

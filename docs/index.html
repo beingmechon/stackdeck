@@ -424,15 +424,17 @@
       fonts, scripts or images. The daemon listens on 127.0.0.1 and the only connections it opens are
       to loopback ports of services you configured yourself. It all works on a plane, and you can
       check that claim in one command while it is running:</p>
-    <pre><span class="f">$</span> lsof -nP -a -p "$(pgrep -f 'stackdeck|server.js' | head -1)" -i
+    <pre><span class="f">$</span> lsof -nP -a -p "$(lsof -ti tcp:8899 -sTCP:LISTEN)" -i
 <span class="f">only 127.0.0.1 listeners, plus loopback connections to your own services</span></pre>
+    <p class="tight">Asked by the port it listens on, not by process name: <code>pgrep -f server.js</code>
+      matches your editor's helpers too.</p>
     <p class="tight">This page is the same: nothing on it is loaded from anywhere but this repository.</p>
   </section>
 
   <section class="wrap">
     <h2>There is a terminal board too</h2>
     <p>Same daemon, so the browser stays in sync with it. Navigate, start, kill, restart, filter,
-      and stream logs in a split pane.</p>
+      and stream logs in a split pane — and press <kbd>p</kbd> for the same port table.</p>
 <pre><span class="f">$</span> <b>stackdeck tui</b>
 
  <b>stackdeck</b>  <span class="f">5 running · 12 stopped</span>
@@ -442,7 +444,7 @@
     <span class="g">●</span> ⧉ feature/rate-limits <span class="a">:3002</span>   71874   worktree
   ○ studio                <span class="f">:5173</span>           pnpm run dev
  ─────────────────────────────────────────────────────────────────
- <span class="f">↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  o open  q quit</span></pre>
+ <span class="f">↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  p ports  o open  q quit</span></pre>
   </section>
 
   <section class="wrap" id="install">
