@@ -12,6 +12,7 @@ const path = require("node:path");
 // so point it somewhere disposable before the require.
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "stackdeck-env-"));
 process.env.STACKDECK_HOME = HOME;
+process.env.STACKDECK_NO_LISTEN = "1"; // helpers only: do not start the daemon
 const { parseEnv, parseEnvFile } = require("../server.js");
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 

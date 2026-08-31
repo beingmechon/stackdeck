@@ -1,5 +1,7 @@
 <img src="logo-wordmark.svg" alt="Stackdeck" height="52">
 
+[![CI](https://github.com/beingmechon/stackdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/beingmechon/stackdeck/actions/workflows/ci.yml)
+
 **Your projects folder, as a control panel.**
 
 <img src="https://beingmechon.github.io/stackdeck/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">

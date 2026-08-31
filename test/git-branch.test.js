@@ -14,6 +14,7 @@ const path = require("node:path");
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "stackdeck-git-"));
 process.env.STACKDECK_HOME = HOME;
+process.env.STACKDECK_NO_LISTEN = "1"; // helpers only: do not start the daemon
 const { gitBranchFast } = require("../server.js");
 
 const temps = [HOME];

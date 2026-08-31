@@ -1,0 +1,154 @@
+name: CI
+
+# Two jobs. `test` runs the unit suite everywhere we claim to support.
+# `smoke` installs the REAL npm tarball and drives the daemon over HTTP —
+# that is the one that catches a file missing from the `files` array in
+# package.json, which leaves the published package broken while the repo
+# works fine.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # No `npm ci`: this package has zero dependencies and no lockfile.
+      - run: npm test
+
+  smoke:
+    name: smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build and globally install the real tarball
+        run: |
+          set -euo pipefail
+          npm pack
+          PREFIX="$RUNNER_TEMP/prefix"
+          mkdir -p "$PREFIX"
+          npm install -g --prefix "$PREFIX" ./stackdeck-*.tgz
+          echo "$PREFIX/bin" >> "$GITHUB_PATH"
+
+      - name: stackdeck --version matches package.json
+        run: |
+          set -euo pipefail
+          EXPECTED=$(node -p "require('./package.json').version")
+          ACTUAL=$(stackdeck --version)
+          echo "package.json: $EXPECTED   installed: $ACTUAL"
+          test "$EXPECTED" = "$ACTUAL"
+
+      - name: Start the daemon on a non-default port
+        run: |
+          set -euo pipefail
+          echo "STACKDECK_HOME=$RUNNER_TEMP/state" >> "$GITHUB_ENV"
+          echo "STACKDECK_PORT=8912" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/state"
+          STACKDECK_HOME="$RUNNER_TEMP/state" STACKDECK_PORT=8912 \
+            stackdeck daemon > "$RUNNER_TEMP/daemon.log" 2>&1 &
+          echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for /api/ping
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$STACKDECK_PORT/api/ping")" = "200" ]; then
+              echo "up after $((i / 2))s"
+              curl -s "http://127.0.0.1:$STACKDECK_PORT/api/ping"; echo
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "daemon never answered /api/ping in 15s"
+          cat "$RUNNER_TEMP/daemon.log"
+          exit 1
+
+      # Each of these is a gate the daemon must not lose. It runs shell
+      # commands on request, so every one of them is load-bearing.
+      - name: Security gates
+        run: |
+          set -euo pipefail
+          BASE="http://127.0.0.1:$STACKDECK_PORT"
+          # status <expected> <label> <curl args...>
+          status() {
+            expected=$1; label=$2; shift 2
+            got=$(curl -s -o /dev/null -w '%{http_code}' "$@")
+            if [ "$got" != "$expected" ]; then
+              echo "FAIL  $label: expected $expected, got $got"
+              exit 1
+            fi
+            echo "ok    $label ($got)"
+          }
+
+          # 1. No token: the API is closed even to a local caller.
+          status 401 "GET /api/projects without a token" "$BASE/api/projects"
+
+          # 2. With the per-install secret from the state dir: open.
+          TOKEN=$(cat "$STACKDECK_HOME/secret")
+          status 200 "GET /api/projects with the token" \
+            -H "X-Stackdeck-Token: $TOKEN" "$BASE/api/projects"
+
+          # 3. text/plain POSTs are the way a hostile page would try to dodge
+          #    the CORS preflight. Rejected before anything else looks at it.
+          status 415 "POST with Content-Type: text/plain" \
+            -X POST -H "Content-Type: text/plain" --data '{}' \
+            -H "X-Stackdeck-Token: $TOKEN" "$BASE/api/start"
+
+          # 4. Host pinning: this is what defeats DNS rebinding, where
+          #    attacker.com resolves to 127.0.0.1 and the browser attaches
+          #    its own Host header.
+          status 403 "request with a foreign Host header" \
+            -H "Host: attacker.example" "$BASE/api/ping"
+
+          # 5. And the cross-origin POST, for the same reason.
+          status 403 "POST with a foreign Origin" \
+            -X POST -H "Content-Type: application/json" \
+            -H "Origin: http://attacker.example" --data '{}' \
+            -H "X-Stackdeck-Token: $TOKEN" "$BASE/api/start"
+
+      - name: Shut the daemon down
+        run: |
+          set -euo pipefail
+          kill "$DAEMON_PID"
+          for i in $(seq 1 20); do
+            kill -0 "$DAEMON_PID" 2>/dev/null || break
+            sleep 0.5
+          done
+          if kill -0 "$DAEMON_PID" 2>/dev/null; then
+            echo "daemon ignored SIGTERM"
+            kill -9 "$DAEMON_PID"
+            exit 1
+          fi
+          # The port must be free again, or something outlived the daemon.
+          if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$STACKDECK_PORT/api/ping"; then
+            echo "something is still listening on $STACKDECK_PORT"
+            exit 1
+          fi
+          echo "clean shutdown"
+
+      - name: Daemon log
+        if: always()
+        run: cat "$RUNNER_TEMP/daemon.log" || true

@@ -12,6 +12,7 @@ const path = require("node:path");
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "stackdeck-ports-"));
 process.env.STACKDECK_HOME = HOME;
+process.env.STACKDECK_NO_LISTEN = "1"; // helpers only: do not start the daemon
 const {
   parseLsofPortPids, parseSsPortPids,
   parseLsofListeners, parseSsListeners,

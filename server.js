@@ -29,12 +29,13 @@ const VERSION = (() => {
 })();
 const ROOT = __dirname;
 
-/* Run as a script this is the daemon; required from a test it is a library of
-   the pure helpers exported at the bottom of the file. The three things that
-   reach outside the process — the shell-PATH probe and the two listeners —
-   are gated on this so `require("./server.js")` never binds a port or spawns
-   a shell. Nothing else changes: as a script, every path below runs as before. */
+/* Run as a script this is the daemon, and so it is when the CLI's `stackdeck
+   daemon` requires it — being required is NOT on its own a reason to stay
+   quiet. Only test/ asks for the helpers alone, and it says so out loud with
+   STACKDECK_NO_LISTEN, which skips the two listeners and the shell-PATH probe.
+   Everything else runs identically either way. */
 const IS_MAIN = require.main === module;
+const NO_LISTEN = process.env.STACKDECK_NO_LISTEN === "1";
 
 /* ---------- state directory & config ---------- */
 
@@ -146,7 +147,7 @@ try {
   if (cached.split(":").length > 3) SHELL_PATH = cached;
 } catch {}
 (function refreshShellPath(i = 0) {
-  if (!IS_MAIN) return; // required as a library: never spawn an interactive shell
+  if (NO_LISTEN) return; // library mode: never spawn an interactive shell
   const shell = process.env.SHELL || "/bin/bash";
   const flags = ["-ilc", "-lc"];
   if (i >= flags.length) return;
@@ -1836,7 +1837,7 @@ server.on("error", (e) => {
   process.exit(1);
 });
 
-if (IS_MAIN) server.listen(PORT, "127.0.0.1", () =>
+if (!NO_LISTEN) server.listen(PORT, "127.0.0.1", () =>
   console.log(`stackdeck v${VERSION} · http://localhost:${PORT} · config ${CONFIG_PATH}`)
 );
 
@@ -1960,7 +1961,7 @@ proxy.on("upgrade", (req, socket, head) => {
   socket.on("error", () => up.destroy());
 });
 (function listenProxy(ports) {
-  if (!IS_MAIN) return; // required as a library: no listeners
+  if (NO_LISTEN) return; // library mode: no listeners
   if (!ports.length) { console.error("proxy: no port available — *.localhost domains disabled"); return; }
   const p = ports[0];
   proxy.once("error", (e) => {
