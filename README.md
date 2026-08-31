@@ -28,9 +28,13 @@ brew install beingmechon/tap/stackdeck                             # Homebrew
 curl -fsSL https://beingmechon.github.io/stackdeck/install.sh | sh  # no npm needed
 ```
 
-Node 18.13+, macOS or Linux. The curl installer unpacks into `~/.local` after
-checking the tarball against the hash npm recorded at publish time; read it
-first at [docs/install.sh](docs/install.sh), or undo it with
+Node 18.13+, macOS or Linux — including **WSL2**, which is expected to work
+but has not been confirmed by anyone running it (`*.localhost` proxying there
+is untested; [details below](#notes)). Windows-native is out of scope.
+
+The curl installer unpacks into `~/.local` after checking the tarball against
+the hash npm recorded at publish time; read it first at
+[docs/install.sh](docs/install.sh), or undo it with
 `curl -fsSL <same url> | sh -s -- --uninstall`.
 
 ```bash
@@ -207,7 +211,7 @@ you visit could start that service.
 </details>
 
 <details>
-<summary><b>Notes that will save you a debugging session</b></summary>
+<summary><b id="notes">Notes that will save you a debugging session</b></summary>
 
 - Services spawn through a **non-login** shell using the PATH of your login
   shell, resolved once at daemon start — so nvm/homebrew/uv tools are found

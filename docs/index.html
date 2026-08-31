@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stackdeck — your projects folder, as a control panel</title>
-<meta name="description" content="Stackdeck finds the projects in your folders, works out how to run each one, and puts them on a board: start, kill, live logs, and a branch dropdown. One Node process, zero dependencies, bound to 127.0.0.1.">
+<title>Stackdeck — run two branches of the same repo at once</title>
+<meta name="description" content="Run two branches of the same repo side by side, each on its own port, in parallel git worktrees. Stackdeck finds the projects in your folders, works out how to run each one, and puts them on a board. One Node process, zero dependencies, bound to 127.0.0.1.">
 <meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://beingmechon.github.io/stackdeck/">
 <meta property="og:title" content="Stackdeck">
-<meta property="og:description" content="Your projects folder, as a control panel. Zero dependencies, git-branch aware, never talks to the internet.">
+<meta property="og:description" content="Run two branches of the same repo side by side, each on its own port. Git-worktree aware, zero dependencies, never talks to the internet.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://beingmechon.github.io/stackdeck/">
 <meta property="og:image" content="https://beingmechon.github.io/stackdeck/demo-poster.jpg">
@@ -259,9 +259,10 @@
 
 <main id="main">
   <div class="wrap hero">
-    <h1>Your projects folder, as a <em>control panel</em>.</h1>
-    <p class="lede">Stackdeck finds the projects in your folders, works out how to run each one,
-      and puts them on a board: <strong>start, kill, live logs, and a branch dropdown</strong>.</p>
+    <h1>Run two branches of the same repo <em>side by side</em>.</h1>
+    <p class="lede">Coding agents make git worktrees constantly, and you end up with branches running on
+      ports you can no longer name. Stackdeck is the board for that — and for the rest of your projects
+      folder: <strong>start, kill, live logs, and every port on the machine</strong>.</p>
     <p class="sub">One Node process, one HTML page, zero dependencies, bound to 127.0.0.1.
       It never talks to the internet.</p>
 
@@ -284,8 +285,9 @@
         <div class="cmd"><span class="prompt" aria-hidden="true">$</span><code>brew install beingmechon/tap/stackdeck</code><button class="copy" type="button">Copy</button></div>
         <p class="note">macOS and Linuxbrew. Pulls in <code>node</code> if you don't have it.</p>
       </div>
-      <p class="note" style="margin-top:16px">Needs Node 18.13 or newer, on macOS or Linux.
-        Then point it at your projects folder and press <b>configure</b> on anything it found.</p>
+      <p class="note" style="margin-top:16px">Needs Node 18.13 or newer, on macOS or Linux
+        (WSL2 included, though nobody has confirmed it yet). Then point it at your projects
+        folder and press <b>configure</b> on anything it found.</p>
     </div>
   </div>
 
