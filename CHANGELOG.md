@@ -36,6 +36,24 @@ what shipped rather than what was written down at the time.
 - A branch name shaped like a command-line option can no longer reach `git`
   as one.
 
+## [0.10.0] — 2026-08-31
+
+### Added
+- The port table outside the browser, where the question actually gets asked:
+  `stackdeck ports [query]` filters over port, pid, process and command, and
+  `stackdeck kill <pid>` has the same guardrails as the panel.
+- `p` in the TUI as a second view, sharing the board's navigation, filter and
+  split pane. `x` arms and a second `x` kills, naming the target first and
+  saying outright when it is an operating-system process; any other key
+  disarms. Enter fills the log pane with cwd, parent and sibling ports.
+- MCP gets `list_ports`, `whats_on_port` and `kill_pid`. `whats_on_port` is
+  the one that matters: an agent that can start services but cannot see why a
+  port is taken will retry a start that can never bind.
+
+### Fixed
+- The TUI died on launch: `render()` already had a local `view`, so the new
+  board/ports `view` was shadowed and read in its temporal dead zone.
+
 ## [0.9.2] — 2026-08-31
 
 ### Fixed
@@ -196,7 +214,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/beingmechon/stackdeck/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/beingmechon/stackdeck/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/beingmechon/stackdeck/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/beingmechon/stackdeck/compare/v0.8.3...v0.9.0
