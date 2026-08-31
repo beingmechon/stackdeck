@@ -10,6 +10,10 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.10.1] — 2026-08-31
+
 ### Added
 - A test suite (`npm test`) covering the `.env` parser, all six port-table
   parsers, ecosystem detection, name hygiene and branch reading. Node's
@@ -228,7 +232,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/beingmechon/stackdeck/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/beingmechon/stackdeck/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/beingmechon/stackdeck/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/beingmechon/stackdeck/compare/v0.9.0...v0.9.1
