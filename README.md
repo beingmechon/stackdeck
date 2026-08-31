@@ -102,6 +102,10 @@ service (it normally is `http://localhost:…`) and there is nothing else.
   natively: no /etc/hosts, no PAC file.
 - **Port conflicts, handled** — if something else holds the port, Start names
   the pid and offers to evict it.
+- **Every port on the machine** — the Ports panel lists everything listening,
+  not just what you configured: which service owns it, the full command, its
+  directory and parent, and a two-click kill. It's how you find the dev server
+  from three weeks ago that is squatting `:3000`.
 - **Databases without Docker** — detects Postgres, MySQL, MongoDB, Redis,
   Elasticsearch, RabbitMQ, NATS, MinIO, Temporal, ClickHouse and friends on
   your machine, and runs them as ordinary services with streamed logs.

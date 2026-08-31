@@ -115,18 +115,24 @@
 
   /* Secondary actions stay quiet until the row (or section head) is engaged —
      the board reads as status, not as a wall of buttons. */
-  .row-actions .ghost, .group-head .actions button, .row .add {
+  .row-actions .ghost, .group-head .actions button, .row .add,
+  #ports-list .row-actions a.badge.link {
     opacity:0; transition:opacity var(--dur) var(--ease);
   }
   .row:hover .row-actions .ghost, .row:focus-within .row-actions .ghost,
   .group-head:hover .actions button, .group-head:focus-within .actions button,
-  .row:hover .add, .row:focus-within .add { opacity:1; }
+  .row:hover .add, .row:focus-within .add,
+  /* ID-prefixed to match the hide rule above: without it that rule's #ports-list
+     wins on specificity and the link never comes back. */
+  #ports-list .row:hover .row-actions a.badge.link,
+  #ports-list .row:focus-within .row-actions a.badge.link { opacity:1; }
   .cat-sel { opacity:0; transition:opacity var(--dur) var(--ease); max-width:150px; font-size:11px; padding:2px 6px; }
   .row:hover .cat-sel, .row:focus-within .cat-sel { opacity:1; }
 
   /* touch devices have no hover — keep actions visible and give them room */
   @media (hover: none) {
-    .row-actions .ghost, .group-head .actions button, .row .add, .cat-sel { opacity:1; }
+    .row-actions .ghost, .group-head .actions button, .row .add, .cat-sel,
+    #ports-list .row-actions a.badge.link { opacity:1; }
     button { padding:10px 14px; }
     .group-head button { padding:7px 10px; }
     .row-actions { gap:6px; }
@@ -164,6 +170,29 @@
   button.ghost:hover { color:var(--text); border-color:var(--border); }
   button.add { color:var(--accent); background:var(--accent-dim); border-color:transparent; }
   button.add:hover { background:var(--accent); color:oklch(0.16 0.02 68); }
+
+  /* ---------- ports ---------- */
+  .pnum {
+    font-family:var(--mono); font-size:14px; font-weight:600; color:var(--accent);
+    width:62px; flex:none; text-align:right;
+  }
+  .pproc { font-weight:600; font-size:13px; min-width:110px; }
+  .ppid { font-family:var(--mono); font-size:12px; color:var(--dim); width:64px; flex:none; }
+  .page { font-family:var(--mono); font-size:12px; color:var(--faint); width:40px; flex:none; text-align:right; }
+  /* Bound to every interface means reachable from the LAN. Most dev servers do
+     this, so it is metadata, not a warning: an accent badge on 80% of rows
+     would only teach you to stop seeing badges. */
+  .badge.lan { color:var(--faint); background:oklch(0.30 0.012 75 / .35); font-weight:500; }
+  .cfg-head .count { margin-left:9px; font-weight:500; }
+  .pdetail {
+    padding:2px 16px 14px 78px; font-family:var(--mono); font-size:12px; color:var(--dim);
+    display:grid; grid-template-columns:auto 1fr; gap:3px 14px; animation:drawerIn .18s var(--ease);
+  }
+  .pdetail dt { color:var(--faint); }
+  .pdetail dd { margin:0; overflow-wrap:anywhere; }
+  .pdetail .hint { grid-column:1 / -1; color:var(--accent); font-family:var(--sans); margin-top:6px; }
+  #ports-list .row-main { padding:9px 16px; }
+  #ports-list .empty { padding:22px 16px; color:var(--faint); }
 
   .drawer { display:none; padding:4px 16px 14px 36px; }
   @keyframes drawerIn { from { opacity:0; transform:translateY(-3px); } }
@@ -392,6 +421,7 @@
   <span id="summary">connecting…</span>
   <span class="spacer"></span>
   <button class="ghost" id="hiddenToggle" style="display:none" onclick="toggleHidden()" title="show/hide the items you've hidden"></button>
+  <button class="ghost" id="portsToggle" aria-expanded="false" onclick="togglePorts()" title="every listening port on this machine">ports</button>
   <button class="ghost" onclick="toggleSettings()">settings</button>
   <span class="paths" id="metaPaths"></span>
 </header>
@@ -482,6 +512,18 @@
       <span class="cfg-status" id="cfg-status" role="status" aria-live="polite"></span>
     </div>
   </div>
+  <div class="ledger" id="ports-panel" style="display:none; margin-top:18px">
+    <div class="cfg-head">
+      <span role="heading" aria-level="2">Ports</span>
+      <span class="count" id="ports-count"></span>
+      <input id="ports-filter" type="search" placeholder="filter by port, pid, or name…" aria-label="filter ports"
+             style="width:230px; margin-left:auto" oninput="renderPorts()">
+      <button class="ghost" onclick="loadPorts(true)" title="re-read the port table now">↻</button>
+      <button class="ghost" aria-label="close ports" onclick="togglePorts()">×</button>
+    </div>
+    <div id="ports-list"></div>
+  </div>
+
   <div class="section-label"><span role="heading" aria-level="2">Services</span> <span class="count" id="svc-count"></span>
     <span style="margin-left:auto; display:flex; gap:4px">
       <button class="ghost" onclick="collapseAll('g', true)">collapse all</button>
@@ -1700,8 +1742,11 @@ async function moveKeep(name, group, before) {
 document.addEventListener("keydown", (ev) => {
   const tag = document.activeElement?.tagName;
   if (ev.key === "Escape") {
+    // An armed kill disarms first: Escape should never be the click that lands.
+    if (portArmed !== null) { clearTimeout(armKill.t); portArmed = null; renderPorts(); return; }
     const settings = document.getElementById("settings");
     if (settings.style.display !== "none") { settings.style.display = "none"; return; }
+    if (portsOpen) { togglePorts(); return; }
     if (open.size) { open.clear(); renderServices(); }
     return;
   }
@@ -1717,7 +1762,156 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 
+/* ---------- ports ----------
+   The board only knows the ports you configured. This is the rest of the
+   machine: what is actually listening, who owns it, and a way to end it.
+   Deliberately not a process manager — only things holding a port appear, and
+   only things holding a port can be killed. */
+let portsData = null, portsOpen = false;
+const portsExpanded = new Set();  // pids whose detail row is open
+const procDetail = {};            // pid -> { cwd, parent, ports }
+let portArmed = null;             // pid whose kill button is awaiting confirmation
+
+// Ports where a browser tab is not the point, so we don't offer to open one.
+const NON_HTTP = new Set([5432, 3306, 6379, 27017, 9200, 5672, 11211, 25, 53, 445, 631]);
+
+function togglePorts() {
+  const el = document.getElementById("ports-panel");
+  portsOpen = el.style.display === "none";
+  el.style.display = portsOpen ? "" : "none";
+  document.getElementById("portsToggle").setAttribute("aria-expanded", String(portsOpen));
+  if (portsOpen) { loadPorts(true); document.getElementById("ports-filter").focus(); }
+}
+
+async function loadPorts(fresh) {
+  try {
+    const r = await fetch("/api/ports" + (fresh ? "?fresh=1" : ""), { headers: { "X-Stackdeck-Token": TOKEN } });
+    portsData = await r.json();
+    renderPorts();
+  } catch { /* the poll will try again */ }
+}
+
+const ago = (s) => s == null ? "" :
+  s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + "m" :
+  s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
+
+// Bound to every interface, or only to loopback? The first is reachable from
+// anything on your network, which is almost never what a dev server intends.
+const isLan = (addrs) => addrs.some((a) => /^(\*|0\.0\.0\.0|\[::\]):/.test(a));
+
+function renderPorts() {
+  const el = document.getElementById("ports-list");
+  if (!portsData) { el.innerHTML = '<div class="empty">reading the port table…</div>'; return; }
+  const q = (document.getElementById("ports-filter").value || "").trim().toLowerCase();
+  const all = portsData.ports;
+  const rows = q ? all.filter((r) =>
+    `${r.port} ${r.pid} ${r.proc} ${r.cmd} ${r.owner ? r.owner.svc : ""}`.toLowerCase().includes(q)) : all;
+
+  const mine = all.filter((r) => r.owner).length;
+  document.getElementById("ports-count").textContent =
+    `${all.length} listening · ${mine} on the board` + (q ? ` · ${rows.length} shown` : "");
+
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty">${q ? "nothing matches that" : "nothing is listening"}</div>`;
+    return;
+  }
+
+  el.innerHTML = rows.map((r) => {
+    const open = portsExpanded.has(r.pid);
+    const d = procDetail[r.pid];
+    const owner = r.owner
+      ? `<span class="badge ${r.owner.kind === "external" ? "ext" : "cfgd"}">${esc(r.owner.svc)}</span>`
+      : "";
+    const lan = isLan(r.addrs) ? `<span class="badge lan" title="bound to every interface — reachable from your network">lan</span>` : "";
+    const canOpen = !NON_HTTP.has(r.port);
+    const act = r.self
+      ? `<span class="badge plain" title="the Stackdeck daemon serving this page">stackdeck</span>`
+      : r.user && r.user !== portsData.me
+        ? `<button class="ghost" disabled title="owned by ${esc(r.user)}, not you">kill</button>`
+        : portArmed === r.pid
+          ? `<button class="kill" onclick="killPid(${r.pid})">confirm kill</button>`
+          : `<button class="ghost" onclick="armKill(${r.pid})">kill</button>`;
+    return `<div class="row">
+      <div class="row-main">
+        <span class="pnum">:${r.port}</span>
+        <span class="ppid">${r.pid}</span>
+        <span class="pproc">${esc(r.proc || "?")}</span>
+        <span class="grow cmdline" title="${esc(r.cmd)}">${esc(r.cmd)}</span>
+        ${owner}${lan}
+        <span class="page" title="running for ${r.age == null ? "?" : r.age + " seconds"}">${ago(r.age)}</span>
+        <div class="row-actions">
+          <button class="ghost" aria-expanded="${open}" onclick="togglePortDetail(${r.pid})">details</button>
+          ${canOpen ? `<a class="badge link" href="http://localhost:${r.port}" target="_blank" rel="noopener">open</a>` : ""}
+          ${act}
+        </div>
+      </div>
+      ${open ? portDetailHtml(r, d) : ""}
+    </div>`;
+  }).join("");
+}
+
+function portDetailHtml(r, d) {
+  if (!d) return `<dl class="pdetail"><dt>loading…</dt><dd></dd></dl>`;
+  const parts = [
+    ["command", esc(r.cmd)],
+    ["directory", d.cwd ? esc(d.cwd) : "not readable"],
+    ["parent", d.parent ? `${d.parent.pid} · ${esc(d.parent.cmd)}` : "none (it is its own parent)"],
+    ["address", r.addrs.map(esc).join("  ")],
+    ["ports", d.ports.map((p) => ":" + p.port).join("  ") || ":" + r.port],
+    ["memory", r.rss ? Math.round(r.rss / 1024) + " MB" : "?"],
+  ];
+  // The one squatter nobody guesses: macOS hands :5000 and :7000 to AirPlay.
+  const airplay = /ControlCent(er|re)/i.test(r.proc || "") && (r.port === 5000 || r.port === 7000)
+    ? `<div class="hint">This is macOS AirPlay Receiver, not a dev server. Turn it off in
+       System Settings → General → AirDrop &amp; Handoff to free :${r.port}.</div>` : "";
+  return `<dl class="pdetail">${parts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}${airplay}</dl>`;
+}
+
+async function togglePortDetail(pid) {
+  if (portsExpanded.has(pid)) { portsExpanded.delete(pid); return renderPorts(); }
+  portsExpanded.add(pid);
+  renderPorts();
+  try {
+    const r = await fetch(`/api/proc?pid=${pid}`, { headers: { "X-Stackdeck-Token": TOKEN } });
+    const j = await r.json();
+    if (r.ok) { procDetail[pid] = j; renderPorts(); }
+    else toast(j.error || "could not read that process", true);
+  } catch { toast("could not read that process", true); }
+}
+
+// Two steps, no modal: the button becomes the confirmation and disarms itself.
+function armKill(pid) {
+  portArmed = pid;
+  renderPorts();
+  clearTimeout(armKill.t);
+  armKill.t = setTimeout(() => { portArmed = null; renderPorts(); }, 4000);
+}
+
+async function killPid(pid) {
+  clearTimeout(armKill.t);
+  portArmed = null;
+  try {
+    const r = await fetch("/api/kill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Stackdeck-Token": TOKEN },
+      body: JSON.stringify({ pid }),
+    });
+    const j = await r.json();
+    if (!r.ok) toast(j.error || "kill failed", true);
+    else if (j.note) toast(j.note, true);
+    else toast(`killed pid ${pid}${j.port ? ` on :${j.port}` : ""}${j.group ? " (and its process group)" : ""}`);
+  } catch { toast("kill failed", true); }
+  portsExpanded.delete(pid);
+  delete procDetail[pid];
+  await loadPorts(true);
+  loadServices(true);   // a killed pid may have been behind a service's green dot
+}
+
 load(); loadMeta(); loadInfra();
+// Never refresh out from under an armed confirmation or a filter being typed.
+setInterval(() => {
+  if (portsOpen && document.visibilityState === "visible" && portArmed === null) loadPorts(true);
+}, 5000);
 setInterval(() => { if (document.visibilityState === "visible") loadInfra(); }, 15000);
 setInterval(() => { if (document.visibilityState === "visible") loadServices(); }, 5000);
 setInterval(() => { if (document.visibilityState === "visible" && !editGuard()) loadProjects(); }, 60000);

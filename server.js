@@ -198,6 +198,94 @@ function portPid(port) {
   return listeningMap().get(Number(port)) ?? null;
 }
 
+/* ---------- every listening port, not just ours ----------
+   listeningMap() answers "who has this service's port?" and throws the rest
+   away. But the question people leave the board to answer in a terminal is the
+   other one: "what the hell has :3000?" — usually a dev server from a checkout
+   they forgot, or a worktree an agent left running. Same lsof, kept whole.
+
+   Two batched calls, never one per pid: lsof for the sockets, ps for the
+   command line and age. Cached like listeningMap, for the same reason. */
+let portsCache = { t: 0, rows: [] };
+function allListeners() {
+  if (Date.now() - portsCache.t < 2000) return portsCache.rows;
+  const byPid = new Map(); // pid -> { pid, proc, user, addrs: Map<port, Set<addr>> }
+  const note = (pid, port, addr) => {
+    const e = byPid.get(pid);
+    if (!e) return;
+    if (!e.addrs.has(port)) e.addrs.set(port, new Set());
+    e.addrs.get(port).add(addr);
+  };
+  try { // macOS + most Linux
+    const out = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-FpcLn"], { timeout: 6000 }).toString();
+    let pid = null;
+    for (const line of out.split("\n")) {
+      const tag = line[0], val = line.slice(1);
+      if (tag === "p") { pid = Number(val); byPid.set(pid, { pid, proc: "", user: "", addrs: new Map() }); }
+      else if (tag === "c" && pid) byPid.get(pid).proc = val;
+      else if (tag === "L" && pid) byPid.get(pid).user = val;
+      else if (tag === "n" && pid) {
+        const m = val.match(/:(\d+)$/);
+        if (m) note(pid, Number(m[1]), val);
+      }
+    }
+  } catch {
+    try { // Linux fallback (iproute2): users=(("node",pid=123,fd=20))
+      const out = execFileSync("ss", ["-ltnpH"], { timeout: 6000 }).toString();
+      for (const line of out.split("\n")) {
+        const m = line.match(/([\d.:*\[\]a-f]+):(\d+)\s+\S+\s+.*users:\(\("([^"]+)",pid=(\d+)/);
+        if (!m) continue;
+        const pid = Number(m[4]);
+        if (!byPid.has(pid)) byPid.set(pid, { pid, proc: m[3], user: "", addrs: new Map() });
+        note(pid, Number(m[2]), `${m[1]}:${m[2]}`);
+      }
+    } catch {}
+  }
+
+  // One ps for the full command line and age. `etime` rather than `lstart`
+  // because its format is locale-independent: [[dd-]hh:]mm:ss.
+  const meta = new Map();
+  try {
+    const out = execFileSync("ps", ["-Ao", "pid=,ppid=,pgid=,etime=,rss=,command="], { timeout: 6000 }).toString();
+    for (const line of out.split("\n")) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.*)$/);
+      if (m) meta.set(Number(m[1]), { ppid: Number(m[2]), pgid: Number(m[3]), age: etimeSec(m[4]), rss: Number(m[5]), cmd: m[6] });
+    }
+  } catch {}
+
+  const rows = [];
+  for (const e of byPid.values()) {
+    const m = meta.get(e.pid) || {};
+    for (const [port, addrs] of e.addrs) {
+      rows.push({
+        port, pid: e.pid, proc: e.proc, user: e.user,
+        addrs: [...addrs].sort(),
+        cmd: m.cmd || e.proc, ppid: m.ppid ?? null, pgid: m.pgid ?? null,
+        age: m.age ?? null, rss: m.rss ?? null,
+        self: e.pid === process.pid,
+      });
+    }
+  }
+  rows.sort((a, b) => a.port - b.port);
+  portsCache = { t: Date.now(), rows };
+  return rows;
+}
+function etimeSec(s) {
+  const m = String(s).match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!m) return null;
+  return (+(m[1] || 0)) * 86400 + (+(m[2] || 0)) * 3600 + (+m[3]) * 60 + (+m[4]);
+}
+
+/* Which configured service (if any) owns a port, so the list can say "this is
+   your api" rather than making you recognise a pnpm command line. */
+function ownerOfPort(port) {
+  const s = (cfg.services || []).find((x) => Number(x.port) === Number(port));
+  if (s) return { svc: s.name, kind: procs[s.name] && procs[s.name].child.exitCode === null ? "managed" : (adoptedPid(s.name) ? "adopted" : "external") };
+  for (const [key, i] of Object.entries(instances))
+    if (instLive(i) && Number(i.port) === Number(port)) return { svc: key, kind: "worktree" };
+  return null;
+}
+
 const MAX_BUF = 2000;
 const nul = () => Object.create(null); // user input indexes these: no prototype keys
 const procs = nul();   // name -> { child, startedAt, branch, stopping }
@@ -1244,6 +1332,90 @@ const handle = async (req, res) => {
       runningPid: portPid(t.port),
       configured: cfg.services.some((s) => s.name === t.name),
     })).filter((t) => t.found));
+
+  if (req.method === "GET" && url.pathname === "/api/ports") {
+    if (url.searchParams.get("fresh")) portsCache.t = 0;
+    return json(res, 200, {
+      me: os.userInfo().username,
+      self: process.pid,
+      ports: allListeners().map((r) => ({ ...r, owner: ownerOfPort(r.port) })),
+    });
+  }
+
+  // Per-pid extras, fetched only when a row is expanded: cwd needs its own lsof
+  // and the parent needs its own ps, and neither is worth doing for every row.
+  if (req.method === "GET" && url.pathname === "/api/proc") {
+    const pid = Number(url.searchParams.get("pid"));
+    if (!Number.isInteger(pid) || pid < 1) return json(res, 400, { error: "bad pid" });
+    if (!alive(pid)) return json(res, 404, { error: `pid ${pid} is gone` });
+    const row = allListeners().find((r) => r.pid === pid) || null;
+    let cwd = null;
+    try {
+      const out = execFileSync("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], { timeout: 4000 }).toString();
+      const m = out.split("\n").find((l) => l.startsWith("n"));
+      if (m) cwd = m.slice(1);
+    } catch {}
+    let parent = null;
+    if (row && row.ppid > 1) {
+      try {
+        parent = { pid: row.ppid, cmd: execFileSync("ps", ["-p", String(row.ppid), "-o", "command="], { timeout: 4000 }).toString().trim() };
+      } catch {}
+    }
+    return json(res, 200, {
+      pid, cwd, parent,
+      ports: allListeners().filter((r) => r.pid === pid).map((r) => ({ port: r.port, addrs: r.addrs })),
+    });
+  }
+
+  /* Kill by pid. Deliberately narrow: only pids that currently hold a listening
+     port can be killed here, which keeps this a port tool rather than a process
+     manager, and bounds what a stray click can reach. */
+  if (req.method === "POST" && url.pathname === "/api/kill") {
+    const b = await readBody(req);
+    const pid = Number(b.pid);
+    if (!Number.isInteger(pid) || pid < 2) return json(res, 400, { error: "bad pid" });
+    if (pid === process.pid)
+      return json(res, 400, { error: "that pid is Stackdeck itself — quit it from the terminal you started it in" });
+    portsCache.t = 0;
+    const row = allListeners().find((r) => r.pid === pid);
+    if (!row) return json(res, 404, { error: `pid ${pid} is not holding a listening port (nothing to do here)` });
+    const me = os.userInfo().username;
+    if (row.user && row.user !== me)
+      return json(res, 403, { error: `pid ${pid} belongs to ${row.user}, not you — Stackdeck will not kill other users' processes` });
+
+    // If it is one of ours, go through the service path: killing the pid behind
+    // its back would fire a crash notification and an on-failure restart for
+    // something the user deliberately stopped.
+    const owner = ownerOfPort(row.port);
+    if (owner && owner.kind !== "external") {
+      const s = findSvc(owner.svc);
+      if (s) {
+        const r = await stopService(s);
+        return json(res, r.code, { ...r, viaService: s.name });
+      }
+    }
+
+    // Group kill only when it leads its own group: that is a dev server and its
+    // children (npm run dev -> vite). Otherwise just the process it asked for.
+    const group = row.pgid === pid;
+    try { process.kill(group ? -pid : pid, "SIGTERM"); }
+    catch (e) { return json(res, 500, { error: `kill ${pid} failed: ${e.message}` }); }
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 8 && alive(pid); i++) await sleep(250);
+    if (alive(pid)) { // same ladder as an external service stop: SIGINT, then admit defeat
+      try { process.kill(group ? -pid : pid, "SIGINT"); } catch {}
+      for (let i = 0; i < 8 && alive(pid); i++) await sleep(250);
+    }
+    portsCache.t = 0;
+    bustPortCache();
+    if (alive(pid))
+      return json(res, 409, { error: `pid ${pid} ignored SIGTERM and SIGINT — it is probably supervised (launchd/systemd/brew services); stop it with its own manager` });
+    const taken = allListeners().find((r) => r.port === row.port);
+    if (taken)
+      return json(res, 200, { ok: true, killed: pid, resurrected: taken.pid,
+        note: `killed pid ${pid}, but something restarted it as pid ${taken.pid} on :${row.port} — it is supervised` });
+    return json(res, 200, { ok: true, killed: pid, port: row.port, group });
+  }
 
   if (req.method === "GET" && url.pathname === "/api/projects") {
     if (!projCache.data || Date.now() - projCache.t > 30000 || url.searchParams.has("fresh"))
