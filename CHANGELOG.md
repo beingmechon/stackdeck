@@ -10,7 +10,13 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- npm keywords caught up with what this is: `git-worktree`, `worktree`, `mcp`,
+  `mcp-server`, `ai-agent`. They still described a Procfile runner.
+- The landing page says how to connect an agent, not just that you can.
+- `CLAUDE.md` carries the rules that kept having to be repeated: no AI vendor
+  names in user-facing copy, the four places positioning lives move together,
+  and sweep for stale details before finishing.
 
 ## [0.11.2] — 2026-08-31
 

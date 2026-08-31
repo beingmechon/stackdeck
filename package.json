@@ -35,6 +35,11 @@
     "dashboard",
     "local-development",
     "git",
+    "git-worktree",
+    "worktree",
+    "mcp",
+    "mcp-server",
+    "ai-agent",
     "procfile",
     "hotel"
   ],

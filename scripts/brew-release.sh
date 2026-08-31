@@ -2,7 +2,7 @@
 # Point the Homebrew formula at a published npm release.
 #
 #   ./scripts/brew-release.sh            # latest on npm
-#   ./scripts/brew-release.sh 0.9.0      # a specific version
+#   ./scripts/brew-release.sh 0.11.2     # a specific version
 #
 # Rewrites packaging/homebrew/stackdeck.rb with that version's tarball URL and
 # sha256, and copies it into the tap checkout if one is present. The formula is

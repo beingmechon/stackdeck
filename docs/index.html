@@ -363,7 +363,9 @@
           <p><code>stackdeck mcp</code> puts the board on MCP: list and start and stop services, run
             a branch in a worktree, read logs, see what is holding a port. Starting returns only
             once the service is actually serving, so an agent never has to guess with a sleep loop —
-            the one thing every integration otherwise reimplements.</p>
+            the one thing every integration otherwise reimplements. MCP is an open standard, so
+            point any client that speaks it at
+            <code>npx -y stackdeck mcp</code> — nothing to install.</p>
         </div>
       </div>
       <div class="point">
