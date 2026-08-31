@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stackdeck — run two branches of the same repo at once</title>
-<meta name="description" content="Run two branches of the same repo side by side, each on its own port, in parallel git worktrees. Stackdeck finds the projects in your folders, works out how to run each one, and puts them on a board. One Node process, zero dependencies, bound to 127.0.0.1.">
+<title>Stackdeck — run the worktrees your agent made</title>
+<meta name="description" content="Your agent made four worktrees. Stackdeck runs them: starts them, keeps them running, streams their logs, shows every port on the machine, and hands all of it to an agent over MCP. One Node process, zero dependencies, bound to 127.0.0.1.">
 <meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://beingmechon.github.io/stackdeck/">
 <meta property="og:title" content="Stackdeck">
-<meta property="og:description" content="Run two branches of the same repo side by side, each on its own port. Git-worktree aware, zero dependencies, never talks to the internet.">
+<meta property="og:description" content="Your agent made four worktrees. Something has to run them. Starts, supervises, streams logs, shows every port, drivable over MCP. Zero dependencies, never talks to the internet.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://beingmechon.github.io/stackdeck/">
 <meta property="og:image" content="https://beingmechon.github.io/stackdeck/demo-poster.jpg">
@@ -259,15 +259,15 @@
 
 <main id="main">
   <div class="wrap hero">
-    <h1>Run two branches of the same repo <em>side by side</em>.</h1>
-    <p class="lede">Coding agents make git worktrees constantly, and you end up with branches
-      running on ports you can no longer name. Pick a branch and Stackdeck runs it <strong>in its
-      own worktree, on its own port</strong>, beside your main checkout — or adopts the one your
-      agent already made, wherever it put it.</p>
-    <p class="sub">And the rest of your projects folder with it: Stackdeck finds every project,
-      works out how to run each one, and boards them all — start, kill, live logs, and every port
-      on the machine. One Node process, one HTML page, zero dependencies, bound to 127.0.0.1.
-      It never talks to the internet.</p>
+    <h1>Your agent made four worktrees. <em>Something has to run them.</em></h1>
+    <p class="lede">Making the worktree is the easy part, and several tools do it well. The part
+      nobody covers is the hour after: four branches, four dev servers, ports you didn't choose,
+      and no idea which are up or what they are printing. Stackdeck <strong>starts them, keeps
+      them running, and streams their logs</strong>.</p>
+    <p class="sub">It works on the rest of your projects folder too: it finds every project, works
+      out how to run each one, and boards them all — with every port on the machine, and an MCP
+      server so an agent can drive the lot. One Node process, one HTML page, zero dependencies,
+      bound to 127.0.0.1. It never talks to the internet.</p>
 
     <div class="picker">
       <div class="tabs" role="tablist" aria-label="Installation method">
@@ -342,36 +342,38 @@
   </div>
 
   <section class="wrap">
-    <h2>Three things it does that other process managers don't</h2>
+    <h2>What it does once the worktree exists</h2>
     <div class="points">
       <div class="point">
         <div class="n">01</div>
         <div>
-          <h3>Run a branch, not just a repo</h3>
-          <p>Every service has a branch dropdown: pick one and Start checks it out first. Or hit the
-            worktree button and that branch runs beside your main checkout, in its own git worktree,
-            on a free port, with the main copy's <code>.env</code>. If a coding agent already made a
-            worktree for that branch, Stackdeck runs the one that exists instead of fighting git over it.</p>
+          <h3>It runs them, and keeps running them</h3>
+          <p>Every branch gets its own row, its own log stream and its own address. A branch runs
+            beside your main checkout in its own git worktree, on a free port, with the main copy's
+            <code>.env</code> — and if an agent already made a worktree for it, Stackdeck runs that
+            one rather than fighting git over it. <em>restart: on-failure</em> backs off
+            exponentially, and <em>dependsOn</em> starts a stack in order, waiting for each piece to
+            be serving rather than merely spawned.</p>
         </div>
       </div>
       <div class="point">
         <div class="n">02</div>
+        <div>
+          <h3>Your agent can drive all of it</h3>
+          <p><code>stackdeck mcp</code> puts the board on MCP: list and start and stop services, run
+            a branch in a worktree, read logs, see what is holding a port. Starting returns only
+            once the service is actually serving, so an agent never has to guess with a sleep loop —
+            the one thing every integration otherwise reimplements.</p>
+        </div>
+      </div>
+      <div class="point">
+        <div class="n">03</div>
         <div>
           <h3>Visit it and it starts</h3>
           <p>Turn on <em>start on demand</em> and opening <code>api.localhost</code> boots the service,
             holding the request until it is ready. With <em>idle stop</em> it shuts down again once
             nothing has touched it for a while, so twenty configured services cost you nothing
             until you open one.</p>
-        </div>
-      </div>
-      <div class="point">
-        <div class="n">03</div>
-        <div>
-          <h3>Your whole projects folder, not one Procfile</h3>
-          <p>It scans your roots, finds the git repos, and infers a run command per project across
-            about fifteen ecosystems: Makefile and just targets, npm/pnpm/yarn/bun scripts, Python
-            with uv, poetry or pipenv, cargo, go, gradle, mix, compose, and more. A monorepo with
-            several apps becomes a whole section of services in one click.</p>
         </div>
       </div>
     </div>
@@ -450,6 +452,26 @@
   ○ studio                <span class="f">:5173</span>           pnpm run dev
  ─────────────────────────────────────────────────────────────────
  <span class="f">↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  p ports  o open  q quit</span></pre>
+  </section>
+
+  <section class="wrap">
+    <h2>How this relates to other tools</h2>
+    <p>Creating an isolated worktree is table stakes now.
+      <a href="https://github.com/rohansx/workz">workz</a> does it as a Rust CLI: symlinks
+      <code>node_modules</code>, copies your <code>.env</code>, installs dependencies, and with
+      <code>--isolated</code> hands out unique ports, database names and a
+      <code>COMPOSE_PROJECT_NAME</code>. Then it exits, which is exactly right for a setup tool.
+      Conductor, Claude Squad and Agent Deck are working the same problem from other angles; go
+      and read them rather than taking my summary of it.</p>
+    <p>Stackdeck is the half that comes after setup. It starts what is in the worktree, supervises
+      it, restarts it when it crashes, streams its logs, says which ports are taken across the
+      whole machine, and exposes all of that to an agent over MCP. Where those tools hand you a
+      provisioned directory, Stackdeck is what keeps watching it — a different job, not a better
+      one.</p>
+    <p class="tight"><b>They compose.</b> Stackdeck finds worktrees through
+      <code>git worktree list</code>, so it adopts whatever created them, wherever they are.
+      Provision with <code>workz --isolated</code>, run the result with Stackdeck, and neither
+      needs to know the other exists.</p>
   </section>
 
   <section class="wrap" id="install">

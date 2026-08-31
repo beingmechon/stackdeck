@@ -1,7 +1,7 @@
 {
   "name": "stackdeck",
   "version": "0.10.3",
-  "description": "Run two branches of the same repo side by side, each on its own port. A browser and terminal board for your local dev services — git-worktree aware, zero dependencies, never leaves 127.0.0.1.",
+  "description": "Your agent made four worktrees. Stackdeck runs them: starts, supervises, streams logs, shows every port on the machine, and drives it all over MCP. A browser and terminal board for local dev services — zero dependencies, never leaves 127.0.0.1.",
   "license": "MIT",
   "author": "beingmechon",
   "homepage": "https://beingmechon.github.io/stackdeck",
