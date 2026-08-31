@@ -1,0 +1,75 @@
+name: Bug report
+description: Something doesn't work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Stackdeck runs on machines I don't have, so the debug output below is
+        the single most useful thing you can give me. Please don't skip it.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+      placeholder: |
+        I clicked Start on my "api" service.
+        I expected it to start.
+        The row went red and the log pane said nothing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: debug-output
+    attributes:
+      label: Output with STACKDECK_DEBUG=1
+      description: |
+        Restart the daemon with debugging on, reproduce the problem, and paste
+        what it printed:
+
+        ```
+        STACKDECK_DEBUG=1 stackdeck daemon
+        ```
+
+        This surfaces errors Stackdeck normally swallows on purpose. Without
+        it there is usually nothing to go on. Redact anything private —
+        paths, tokens, env var values.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: stackdeck-version
+    attributes:
+      label: Stackdeck version
+      description: "`stackdeck --version`"
+      placeholder: "0.9.2"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: "`node --version`"
+      placeholder: "v22.11.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      description: macOS, or the Linux distro and release. Say if it's WSL2.
+      placeholder: "macOS 15.1 (Apple Silicon) / Ubuntu 24.04 / Ubuntu 24.04 on WSL2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: The service config involved, whether it's a worktree instance, screenshots.
+    validations:
+      required: false
