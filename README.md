@@ -2,23 +2,20 @@
 
 [![CI](https://github.com/beingmechon/stackdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/beingmechon/stackdeck/actions/workflows/ci.yml)
 
-**Run two branches of the same repo side by side, each on its own port.**
+**Your agent made four worktrees. Something has to run them.**
 
 <img src="https://beingmechon.github.io/stackdeck/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">
 
-Coding agents make git worktrees constantly, and you end up with four
-half-finished branches, three of them running on ports you can no longer name.
-Stackdeck is the board for that. Pick a branch from a service's dropdown and
-Start checks it out; hit ⧉ and that branch runs in its own worktree beside your
-main checkout, on a free port, with your main copy's `.env`. If your agent
-already made a worktree for that branch — wherever it put it — Stackdeck runs
-that one instead of fighting git over it.
+Making the worktree is the easy part, and by now several tools do it well. The
+part nobody covers is the hour after: four branches, four dev servers, ports
+you didn't choose, and no idea which are up or what they're printing. Stackdeck
+starts them, keeps them running, streams their logs, tells you every port on
+the machine, and hands all of it to your agent over MCP.
 
-The rest is what makes that usable day to day: it scans your projects folders,
-works out how to run each repo across ~15 ecosystems, and puts them all on one
-board — Start, Kill, live logs, and every port on the machine, not just yours.
-One Node process, one HTML page, no dependencies, bound to 127.0.0.1, and it
-never talks to the internet.
+It works on the rest of your projects folder too — it scans your roots, works
+out how to run each repo across ~15 ecosystems, and puts them on one board with
+Start, Kill and live logs. One Node process, one HTML page, no dependencies,
+bound to 127.0.0.1, and it never talks to the internet.
 
 ## Install
 
@@ -59,17 +56,22 @@ no `stackdeck` command on your PATH afterwards.
  ↑↓ move  s start  x kill  r restart  ⏎ logs  / filter  p ports  o open  q quit
 ```
 
-## The three things it does that other process managers don't
+## What it does once the worktree exists
 
-**Run a branch, not just a repo.** The one above — and it composes with the
-rest: a worktree instance gets its own log stream, its own row, and its own
-`branch.service.localhost` address, so two branches of one API can be open in
-two tabs.
+**It runs them, and keeps running them.** Every branch gets its own row, its
+own log stream and its own `branch.service.localhost` address, so two branches
+of one API can be open in two tabs. `restart: on-failure` backs off
+exponentially; `dependsOn` starts a stack in order and waits for each piece to
+be *ready* rather than merely spawned. Turn on *start on demand* and opening
+`api.localhost` boots a stopped service and holds the request until it answers;
+*idle stop* shuts it down again, so twenty configured services cost nothing
+until you open one.
 
-**Visit it and it starts.** Turn on *start on demand* and opening
-`api.localhost` boots the service and holds the request until it's ready.
-With *idle stop*, it shuts down again once nothing has hit it for a while —
-so twenty configured services cost nothing until you open one.
+**Your agent can drive all of it.** `stackdeck mcp` exposes the board over MCP:
+list and start and stop services, run a branch in a worktree, read logs, see
+what is holding a port. `start_service` and `start_worktree` return only once
+the thing is actually serving, so an agent never has to guess with a sleep
+loop — the single most common thing every integration reimplements.
 
 **Every port on the machine, not just yours.** The Ports panel lists
 everything listening — which service owns it, the full command line, its
@@ -263,6 +265,38 @@ you visit could start that service.
 Linux: run `stackdeck`, or add a systemd user unit for `node server.js`.
 </details>
 
+## How this relates to other tools
+
+Creating an isolated worktree is table stakes now. [workz][workz] does it as a
+Rust CLI: symlinks `node_modules`, copies your `.env`, installs dependencies,
+and with `--isolated` hands out unique ports, database names and a
+`COMPOSE_PROJECT_NAME`. Then it exits, which is exactly right for a setup tool.
+Conductor, Claude Squad and Agent Deck are working the same problem from other
+angles; check each for yourself rather than taking my summary of it.
+
+Stackdeck is the half that comes after setup. It starts what is in the
+worktree, supervises it, restarts it when it crashes, streams its logs, says
+which ports are taken across the whole machine, and exposes all of that to an
+agent over MCP. Where those tools hand you a provisioned directory, Stackdeck
+is what keeps watching it — a different job, not a better one.
+
+**They compose.** Stackdeck finds worktrees through `git worktree list`, so it
+adopts whatever created them, wherever they are — nested in the repo, a sibling
+directory, a central cache. Provision with `workz --isolated`, run the result
+with Stackdeck, and neither tool needs to know the other exists. Stackdeck also
+symlinks heavy directories when it creates a worktree itself, which overlaps
+with what workz does; if workz got there first, Stackdeck leaves what it finds
+alone.
+
+Further back, this is a spiritual successor to
+[hotel](https://github.com/typicode/hotel), which did the `*.localhost` proxy
+and the start-things-for-me part well and has been unmaintained since 2019.
+Also in the neighbourhood: Foreman and Overmind (one Procfile, no UI), Docker
+Compose (containers, not your host), and Laravel Herd or DBngin (excellent,
+macOS and PHP-shaped).
+
+[workz]: https://github.com/rohansx/workz
+
 ## Debugging
 
 Stackdeck swallows a lot of errors on purpose — a missing `.env`, an `lsof`
@@ -285,15 +319,6 @@ STACKDECK_DEBUG=1 stackdeck daemon
 It changes nothing else — same behaviour, same exit codes, just louder. **Put
 this output in any bug report**; it is the single most useful thing for
 working out what happened on a machine that isn't mine.
-
-## Prior art
-
-Spiritual successor to [hotel](https://github.com/typicode/hotel), which did
-the `*.localhost` proxy and the start-things-for-me part well and has been
-unmaintained since 2019. Stackdeck adds the git-awareness it never had, which
-turned out to be the interesting half. Also in the neighbourhood: Foreman and
-Overmind (one Procfile, no UI), Docker Compose (containers, not your host),
-and Laravel Herd or DBngin (excellent, macOS and PHP-shaped).
 
 ## Status
 
