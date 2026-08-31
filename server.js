@@ -527,6 +527,14 @@ function serviceState(s) {
 
 /* ---------- project discovery ---------- */
 
+/* Five minutes, not thirty seconds. The scan only ever goes stale for one
+   reason — a directory appeared or vanished on disk — and every change made
+   THROUGH Stackdeck (adding a service, renaming a category, editing the
+   roots) sets projCache.t = 0 explicitly, so those are never stale at all.
+   The UI polls this endpoint once a minute, so a short TTL bought nothing but
+   ten rescans an hour; a repo you just cloned outside Stackdeck is what the
+   Refresh control (and ?fresh=1) is for. */
+const PROJ_TTL = 5 * 60 * 1000;
 let projCache = { t: 0, data: null };
 
 // Fast branch read (no git spawn): parse .git/HEAD directly. Handles the
@@ -742,8 +750,45 @@ function detectProcs(dir) {
   return all.length > 1 ? all : null;
 }
 
-function scanProjects() {
-  const out = [];
+/* Run tasks with at most `limit` in flight. Twenty lines instead of p-limit,
+   because a dependency for this would be a dependency for THIS. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+      // setImmediate, not a resolved promise: it lands in the check phase, so
+      // the poll phase — every pending HTTP request — runs first. A microtask
+      // would let the workers hand off to each other and starve I/O anyway.
+      await new Promise(setImmediate);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+const SCAN_CONCURRENCY = 16;
+
+/* Scanning is async for one reason: the daemon is single-threaded, and the
+   synchronous version froze it — no log streaming, no port polling, no
+   start/kill — for as long as the whole scan took. At 400 projects that was
+   ~100ms of solid block, every time the cache expired.
+
+   Each project's own work (inferCommand, detectProcs, gitBranchFast) stays
+   synchronous on purpose: it is sub-millisecond per project, and those three
+   are the file's tested surface. What matters is that every project begins
+   with a REAL async fs call, so the event loop gets serviced between them.
+   Awaiting a resolved promise would not do it — microtasks never let I/O in. */
+// fs.existsSync's async twin. A worktree's .git is a FILE, not a directory,
+// so this must be an existence check and not a stat-isDirectory one.
+const exists = async (p) => { try { await fs.promises.access(p); return true; } catch { return false; } };
+const lsDirs = async (p) => {
+  try { return (await fs.promises.readdir(p, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith(".")); }
+  catch { return []; }
+};
+
+async function scanProjects() {
   const excluded = new Set((cfg.excludes || []).map(expand));
   const pc = cfg.projectCategories || {};
   const entry = (dir, name, root, catKeys, isGit, cmd) => ({
@@ -757,43 +802,39 @@ function scanProjects() {
     configured: cfg.services.some((s) => svcDir(s) === dir || svcDir(s).startsWith(dir + path.sep)),
     category: catKeys.map((k) => pc[k]).find(Boolean) || "Uncategorized",
   });
-  const lsDirs = (p) => {
-    try { return fs.readdirSync(p, { withFileTypes: true }).filter((x) => x.isDirectory() && !x.name.startsWith(".")); }
-    catch { return []; }
-  };
-  for (const root of cfg.projectRoots.map(expand)) {
-    for (const e of lsDirs(root)) {
-      const dir = path.join(root, e.name);
-      if (excluded.has(dir)) continue;
-      // A real project: it's a git repo or we know how to run it.
-      const isGit = fs.existsSync(path.join(dir, ".git"));
-      const cmd = inferCommand(dir);
-      if (isGit || cmd) {
-        out.push(entry(dir, e.name, root, [e.name], isGit, cmd));
-        continue;
-      }
-      // Container folder: not a repo itself, but may hold repos one level
-      // down (e.g. work/team-api). Surface those instead, inheriting the
-      // container's category unless mapped individually.
-      const subs = lsDirs(dir)
-        .map((s) => {
-          const sdir = path.join(dir, s.name);
-          if (excluded.has(sdir)) return null;
-          const sGit = fs.existsSync(path.join(sdir, ".git"));
-          const sCmd = inferCommand(sdir);
-          return sGit || sCmd ? { sdir, sGit, sCmd } : null;
-        })
-        .filter(Boolean);
-      if (subs.length) {
-        for (const { sdir, sGit, sCmd } of subs) {
-          const sub = path.basename(sdir);
-          out.push(entry(sdir, `${e.name}/${sub}`, root, [`${e.name}/${sub}`, sub, e.name], sGit, sCmd));
-        }
-      } else {
-        out.push(entry(dir, e.name, root, [e.name], false, null)); // plain folder, listed as-is
-      }
+
+  // Flatten the roots first so one bounded pool covers every candidate,
+  // rather than one pool per root.
+  const candidates = [];
+  for (const root of cfg.projectRoots.map(expand))
+    for (const e of await lsDirs(root)) candidates.push({ root, name: e.name, dir: path.join(root, e.name) });
+
+  const perDir = await mapLimit(candidates, SCAN_CONCURRENCY, async ({ root, name, dir }) => {
+    if (excluded.has(dir)) return [];
+    // A real project: it's a git repo or we know how to run it.
+    const isGit = await exists(path.join(dir, ".git"));
+    const cmd = inferCommand(dir);
+    if (isGit || cmd) return [entry(dir, name, root, [name], isGit, cmd)];
+
+    // Container folder: not a repo itself, but may hold repos one level
+    // down (e.g. work/team-api). Surface those instead, inheriting the
+    // container's category unless mapped individually.
+    const subs = [];
+    for (const s of await lsDirs(dir)) {
+      const sdir = path.join(dir, s.name);
+      if (excluded.has(sdir)) continue;
+      const sGit = await exists(path.join(sdir, ".git"));
+      const sCmd = inferCommand(sdir);
+      if (sGit || sCmd) subs.push({ sdir, sGit, sCmd });
     }
-  }
+    if (!subs.length) return [entry(dir, name, root, [name], false, null)]; // plain folder, listed as-is
+    return subs.map(({ sdir, sGit, sCmd }) => {
+      const sub = path.basename(sdir);
+      return entry(sdir, `${name}/${sub}`, root, [`${name}/${sub}`, sub, name], sGit, sCmd);
+    });
+  });
+
+  const out = perDir.flat();
   out.sort((a, b) => (b.suggestedCommand ? 1 : 0) - (a.suggestedCommand ? 1 : 0) || byName(a.name, b.name));
   return out;
 }
@@ -1553,8 +1594,8 @@ const handle = async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/projects") {
-    if (!projCache.data || Date.now() - projCache.t > 30000 || url.searchParams.has("fresh"))
-      projCache = { t: Date.now(), data: scanProjects() };
+    if (!projCache.data || Date.now() - projCache.t > PROJ_TTL || url.searchParams.has("fresh"))
+      projCache = { t: Date.now(), data: await scanProjects() };
     return json(res, 200, projCache.data);
   }
 
