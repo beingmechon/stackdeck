@@ -1,6 +1,6 @@
 {
   "name": "stackdeck",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Run two branches of the same repo side by side, each on its own port. A browser and terminal board for your local dev services — git-worktree aware, zero dependencies, never leaves 127.0.0.1.",
   "license": "MIT",
   "author": "beingmechon",

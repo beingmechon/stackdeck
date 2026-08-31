@@ -12,6 +12,15 @@ what shipped rather than what was written down at the time.
 
 Nothing yet.
 
+## [0.10.3] — 2026-08-31
+
+### Changed
+- The worktree copy no longer names a particular coding agent. Stackdeck
+  adopts a worktree wherever it was made and whatever made it — it reads
+  `git worktree list` — so naming one tool was both an endorsement the copy
+  should not carry and a weaker claim than the truth. npm renders the README
+  from the published tarball, so reaching the package page needed a release.
+
 ## [0.10.2] — 2026-08-31
 
 ### Changed
@@ -242,7 +251,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/beingmechon/stackdeck/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/beingmechon/stackdeck/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/beingmechon/stackdeck/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/beingmechon/stackdeck/compare/v0.9.2...v0.10.0
