@@ -354,6 +354,11 @@
             one rather than fighting git over it. <em>restart: on-failure</em> backs off
             exponentially, and <em>dependsOn</em> starts a stack in order, waiting for each piece to
             be serving rather than merely spawned.</p>
+          <p>A worktree costs a checkout, not a gigabyte: <code>node_modules</code>,
+            <code>target</code> and <code>.venv</code> are symlinked back at the main checkout
+            rather than copied, and never anything git tracks. With <code>isolateDb</code> the
+            branch gets its own copy of the Postgres database too, so an agent's migration cannot
+            reach your main checkout's data.</p>
         </div>
       </div>
       <div class="point">
@@ -491,7 +496,7 @@
       <p>Downloads the published tarball, checks it against the sha512 npm recorded at publish time,
         unpacks it into <code>~/.local/lib/stackdeck</code> and symlinks one command. Nothing is
         compiled and nothing is fetched afterwards, because there are no dependencies to fetch.
-        Pin a version with <code>STACKDECK_VERSION=0.8.2</code>, move it with
+        Pin a version with <code>STACKDECK_VERSION=0.11.2</code>, move it with
         <code>STACKDECK_PREFIX=/opt</code>, and remove it with the same script and
         <code>-s -- --uninstall</code>.
         <a href="https://github.com/beingmechon/stackdeck/blob/main/docs/install.sh">Read it before you pipe it</a>.</p>

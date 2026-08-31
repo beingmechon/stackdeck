@@ -10,6 +10,10 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.12.0] — 2026-08-31
+
 ### Added
 - Per-worktree Postgres isolation (`isolateDb`). A branch gets its own copy of
   the dev database via `CREATE DATABASE ... TEMPLATE`, and the rewritten URL is
@@ -23,6 +27,9 @@ what shipped rather than what was written down at the time.
   `projectCategories` and `themeTokens` were implemented and undiscoverable.
 
 ### Changed
+- The README is 41% shorter to read: 2029 visible words down to ~1200,
+  with the feature list, config, security model and notes behind `<details>`.
+  Nothing was dropped — 75 distinctive terms checked across the rewrite.
 - npm keywords caught up with what this is: `git-worktree`, `worktree`, `mcp`,
   `mcp-server`, `ai-agent`. They still described a Procfile runner.
 - The landing page says how to connect an agent, not just that you can.
@@ -313,7 +320,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/beingmechon/stackdeck/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...v0.11.2
 [0.11.0]: https://github.com/beingmechon/stackdeck/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/beingmechon/stackdeck/compare/v0.10.2...v0.10.3
