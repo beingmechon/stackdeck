@@ -373,6 +373,41 @@
   </section>
 
   <section class="wrap">
+    <h2>And the ports you never configured</h2>
+    <p>The board knows the services you set up. The Ports panel knows the machine: everything
+      listening, which of your services owns it, the command behind it, its directory and parent,
+      and a two-click kill. It is how you find the dev server from three weeks ago sitting on
+      <code>:3000</code>.</p>
+    <figure>
+      <div class="board">
+        <div class="row">
+          <span class="addr" style="color:var(--accent); font-weight:600; width:58px; text-align:right">:3000</span>
+          <span class="name" style="font-family:var(--mono); font-size:12.5px; font-weight:500">54211</span>
+          <span class="cmdline">node …/side-project/node_modules/.bin/next dev</span>
+          <span class="tag">22d</span>
+          <span class="fauxbtn">kill</span>
+        </div>
+        <div class="row">
+          <span class="addr" style="color:var(--accent); font-weight:600; width:58px; text-align:right">:5000</span>
+          <span class="name" style="font-family:var(--mono); font-size:12.5px; font-weight:500">1113</span>
+          <span class="cmdline">ControlCenter — macOS AirPlay Receiver, not a dev server</span>
+          <span class="tag">system</span>
+          <span class="fauxbtn">kill</span>
+        </div>
+        <div class="row">
+          <span class="addr" style="color:var(--faint); font-weight:600; width:58px; text-align:right">:8021</span>
+          <span class="name" style="font-family:var(--mono); font-size:12.5px; font-weight:500; color:var(--faint)">—</span>
+          <span class="cmdline">owned by root — Stackdeck runs as you and cannot see or kill it</span>
+          <span class="tag">needs sudo</span>
+        </div>
+      </div>
+      <figcaption>It never asks for sudo, so root-owned ports are listed and left alone rather than
+        quietly missing. Operating system processes that run under your own account say so before
+        you kill one.</figcaption>
+    </figure>
+  </section>
+
+  <section class="wrap">
     <h2>Watch it work</h2>
     <button class="demo" type="button" id="demo">
       <img src="demo-poster.jpg" width="1000" height="570"
@@ -440,7 +475,7 @@
 
   <section class="wrap">
     <h2>What it costs you</h2>
-    <p>About 80 KB on disk and one Node process. Two files you can read in an evening, which is the
+    <p>About 300 KB on disk and one Node process. Two files you can read in an evening, which is the
       point for something that runs shell commands on your machine: the daemon is one
       <code>server.js</code>, the board is one <code>index.html</code>, and there is no build step
       and no dependency tree between you and either of them.</p>

@@ -67,7 +67,15 @@
          border:1.5px solid var(--faint); flex:none; }
   .dot.up { background:var(--green); border-color:var(--green); box-shadow:0 0 0 3px var(--green-dim); }
 
-  .svc-name { font-weight:600; font-size:14px; min-width:96px; }
+  /* An explicit min-width replaces a flex item's default min-width:auto, which
+     is the thing that normally stops it shrinking below its own text. Without
+     flex:none, a long service name gets squeezed to 96px and, since overflow is
+     visible by default, paints straight over the badge next to it. */
+  .svc-name {
+    font-weight:600; font-size:14px;
+    flex:none; min-width:96px; max-width:min(280px, 30vw);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
   .addr { font-family:var(--mono); font-size:12px; color:var(--dim); white-space:nowrap; }
   .grow { flex:1; min-width:0; }
   .cmdline {
@@ -788,7 +796,7 @@ function svcRow(s) {
             title="drag to reorder or move to a section · or focus and use arrow keys"
             ondragstart="dragStart(event,'${esc(s.name)}')" ondragend="dragEnd()">⠿</span>
       <span class="dot ${s.running ? "up" : ""}" role="img" aria-label="${s.running ? "running" : "stopped"}"></span>
-      <span class="svc-name">${esc(s.name)}</span>
+      <span class="svc-name" title="${esc(s.name)}">${esc(s.name)}</span>
       ${s.resurrected
         ? '<span class="badge crash" title="Stackdeck killed it, but a supervisor (brew services / launchd / systemd) restarted it; stop it with its own manager, e.g. brew services stop">auto-restarted</span>'
         : s.running && !s.managed ? '<span class="badge ext" title="running, but not started from Stackdeck">external</span>' : ""}
