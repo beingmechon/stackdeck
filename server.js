@@ -29,6 +29,13 @@ const VERSION = (() => {
 })();
 const ROOT = __dirname;
 
+/* Run as a script this is the daemon; required from a test it is a library of
+   the pure helpers exported at the bottom of the file. The three things that
+   reach outside the process — the shell-PATH probe and the two listeners —
+   are gated on this so `require("./server.js")` never binds a port or spawns
+   a shell. Nothing else changes: as a script, every path below runs as before. */
+const IS_MAIN = require.main === module;
+
 /* ---------- state directory & config ---------- */
 
 // Only "~" and "~/…" are home shorthand; "~user" is left untouched.
@@ -139,6 +146,7 @@ try {
   if (cached.split(":").length > 3) SHELL_PATH = cached;
 } catch {}
 (function refreshShellPath(i = 0) {
+  if (!IS_MAIN) return; // required as a library: never spawn an interactive shell
   const shell = process.env.SHELL || "/bin/bash";
   const flags = ["-ilc", "-lc"];
   if (i >= flags.length) return;
@@ -164,29 +172,48 @@ function git(dir, ...args) {
   }
 }
 
+/* The port tables below are parsed from three different text formats, and a
+   wrong answer here is silent rather than loud (a row simply says the wrong
+   pid). Parsing is kept separate from the subprocess call throughout this
+   file: the `parse*` functions take a raw string and return a structure, so
+   they can be exercised against captured fixtures. */
+
+// lsof -Fp -Fn: "p<pid>" lines followed by that pid's "n<addr>" lines.
+// First writer wins, matching lsof's own ordering (oldest listener first).
+function parseLsofPortPids(out) {
+  const map = new Map();
+  let pid = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    else if (line.startsWith("n")) {
+      const m = line.match(/:(\d+)$/);
+      if (m && pid && !map.has(Number(m[1]))) map.set(Number(m[1]), pid);
+    }
+  }
+  return map;
+}
+
+// ss -ltnpH: "LISTEN 0 511 *:3000 *:* users:(("node",pid=123,fd=20))"
+function parseSsPortPids(out) {
+  const map = new Map();
+  for (const line of out.split("\n")) {
+    const m = line.match(/[:\]](\d+)\s.*pid=(\d+)/);
+    if (m && !map.has(Number(m[1]))) map.set(Number(m[1]), Number(m[2]));
+  }
+  return map;
+}
+
 // One lsof/ss call covering ALL listeners, cached ~2.5s — the UI polls every
 // service's port every 5s, and per-port subprocess spawns block the event loop.
 let portCache = { t: 0, map: new Map() };
 function listeningMap() {
   if (Date.now() - portCache.t < 2500) return portCache.map;
-  const map = new Map();
+  let map = new Map();
   try { // macOS + most Linux
-    const out = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], { timeout: 4000 }).toString();
-    let pid = null;
-    for (const line of out.split("\n")) {
-      if (line.startsWith("p")) pid = Number(line.slice(1));
-      else if (line.startsWith("n")) {
-        const m = line.match(/:(\d+)$/);
-        if (m && pid && !map.has(Number(m[1]))) map.set(Number(m[1]), pid);
-      }
-    }
+    map = parseLsofPortPids(execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"], { timeout: 4000 }).toString());
   } catch {
     try { // Linux fallback (iproute2)
-      const out = execFileSync("ss", ["-ltnpH"], { timeout: 4000 }).toString();
-      for (const line of out.split("\n")) {
-        const m = line.match(/[:\]](\d+)\s.*pid=(\d+)/);
-        if (m && !map.has(Number(m[1]))) map.set(Number(m[1]), Number(m[2]));
-      }
+      map = parseSsPortPids(execFileSync("ss", ["-ltnpH"], { timeout: 4000 }).toString());
     } catch {}
   }
   portCache = { t: Date.now(), map };
@@ -207,50 +234,73 @@ function portPid(port) {
    Two batched calls, never one per pid: lsof for the sockets, ps for the
    command line and age. Cached like listeningMap, for the same reason. */
 let portsCache = { t: 0, rows: [] };
+
+// A listener entry keeps every address a pid holds a given port on, so
+// "127.0.0.1 and [::1]" collapses into one row rather than two.
+const noteAddr = (byPid, pid, port, addr) => {
+  const e = byPid.get(pid);
+  if (!e) return;
+  if (!e.addrs.has(port)) e.addrs.set(port, new Set());
+  e.addrs.get(port).add(addr);
+};
+
+// lsof -FpcLn: p<pid> starts a record, then c<command> L<login> n<addr>.
+// Returns pid -> { pid, proc, user, addrs: Map<port, Set<addr>> }.
+function parseLsofListeners(out) {
+  const byPid = new Map();
+  let pid = null;
+  for (const line of out.split("\n")) {
+    const tag = line[0], val = line.slice(1);
+    if (tag === "p") { pid = Number(val); byPid.set(pid, { pid, proc: "", user: "", addrs: new Map() }); }
+    else if (tag === "c" && pid) byPid.get(pid).proc = val;
+    else if (tag === "L" && pid) byPid.get(pid).user = val;
+    else if (tag === "n" && pid) {
+      const m = val.match(/:(\d+)$/);
+      if (m) noteAddr(byPid, pid, Number(m[1]), val);
+    }
+  }
+  return byPid;
+}
+
+// ss -ltnpH, same shape as parseLsofListeners: users=(("node",pid=123,fd=20))
+function parseSsListeners(out) {
+  const byPid = new Map();
+  for (const line of out.split("\n")) {
+    const m = line.match(/([\d.:*\[\]a-f]+):(\d+)\s+\S+\s+.*users:\(\("([^"]+)",pid=(\d+)/);
+    if (!m) continue;
+    const pid = Number(m[4]);
+    if (!byPid.has(pid)) byPid.set(pid, { pid, proc: m[3], user: "", addrs: new Map() });
+    noteAddr(byPid, pid, Number(m[2]), `${m[1]}:${m[2]}`);
+  }
+  return byPid;
+}
+
+// ps -Ao pid=,ppid=,pgid=,etime=,rss=,command= -> pid -> { ppid, pgid, age, rss, cmd }
+function parsePsTable(out) {
+  const meta = new Map();
+  for (const line of out.split("\n")) {
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.*)$/);
+    if (m) meta.set(Number(m[1]), { ppid: Number(m[2]), pgid: Number(m[3]), age: etimeSec(m[4]), rss: Number(m[5]), cmd: m[6] });
+  }
+  return meta;
+}
+
 function allListeners() {
   if (Date.now() - portsCache.t < 2000) return portsCache.rows;
-  const byPid = new Map(); // pid -> { pid, proc, user, addrs: Map<port, Set<addr>> }
-  const note = (pid, port, addr) => {
-    const e = byPid.get(pid);
-    if (!e) return;
-    if (!e.addrs.has(port)) e.addrs.set(port, new Set());
-    e.addrs.get(port).add(addr);
-  };
+  let byPid = new Map(); // pid -> { pid, proc, user, addrs: Map<port, Set<addr>> }
   try { // macOS + most Linux
-    const out = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-FpcLn"], { timeout: 6000 }).toString();
-    let pid = null;
-    for (const line of out.split("\n")) {
-      const tag = line[0], val = line.slice(1);
-      if (tag === "p") { pid = Number(val); byPid.set(pid, { pid, proc: "", user: "", addrs: new Map() }); }
-      else if (tag === "c" && pid) byPid.get(pid).proc = val;
-      else if (tag === "L" && pid) byPid.get(pid).user = val;
-      else if (tag === "n" && pid) {
-        const m = val.match(/:(\d+)$/);
-        if (m) note(pid, Number(m[1]), val);
-      }
-    }
+    byPid = parseLsofListeners(execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-FpcLn"], { timeout: 6000 }).toString());
   } catch {
-    try { // Linux fallback (iproute2): users=(("node",pid=123,fd=20))
-      const out = execFileSync("ss", ["-ltnpH"], { timeout: 6000 }).toString();
-      for (const line of out.split("\n")) {
-        const m = line.match(/([\d.:*\[\]a-f]+):(\d+)\s+\S+\s+.*users:\(\("([^"]+)",pid=(\d+)/);
-        if (!m) continue;
-        const pid = Number(m[4]);
-        if (!byPid.has(pid)) byPid.set(pid, { pid, proc: m[3], user: "", addrs: new Map() });
-        note(pid, Number(m[2]), `${m[1]}:${m[2]}`);
-      }
+    try { // Linux fallback (iproute2)
+      byPid = parseSsListeners(execFileSync("ss", ["-ltnpH"], { timeout: 6000 }).toString());
     } catch {}
   }
 
   // One ps for the full command line and age. `etime` rather than `lstart`
   // because its format is locale-independent: [[dd-]hh:]mm:ss.
-  const meta = new Map();
+  let meta = new Map();
   try {
-    const out = execFileSync("ps", ["-Ao", "pid=,ppid=,pgid=,etime=,rss=,command="], { timeout: 6000 }).toString();
-    for (const line of out.split("\n")) {
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.*)$/);
-      if (m) meta.set(Number(m[1]), { ppid: Number(m[2]), pgid: Number(m[3]), age: etimeSec(m[4]), rss: Number(m[5]), cmd: m[6] });
-    }
+    meta = parsePsTable(execFileSync("ps", ["-Ao", "pid=,ppid=,pgid=,etime=,rss=,command="], { timeout: 6000 }).toString());
   } catch {}
 
   const rows = [];
@@ -296,26 +346,40 @@ const SYSTEM_PREFIXES = [
 ];
 const isSystemPath = (cmd) => SYSTEM_PREFIXES.some((p) => cmd.startsWith(p));
 
+// netstat -an -p tcp (macOS/BSD): "tcp4 0 0 127.0.0.1.8899 *.* LISTEN".
+// The local address is column 4 and its port is after the LAST dot, which is
+// what makes this work for IPv6 rows too ("::1.8899").
+function parseNetstatPorts(out) {
+  const ports = new Set();
+  for (const line of out.split("\n")) {
+    if (!/\bLISTEN\b/.test(line)) continue;
+    const m = line.trim().split(/\s+/)[3];
+    const p = m && Number(m.slice(m.lastIndexOf(".") + 1));
+    if (Number.isInteger(p) && p > 0) ports.add(p);
+  }
+  return ports;
+}
+
+// ss -ltnH (Linux): "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*"
+function parseSsPorts(out) {
+  const ports = new Set();
+  for (const line of out.split("\n")) {
+    const m = line.trim().split(/\s+/)[3];
+    const p = m && Number(m.slice(m.lastIndexOf(":") + 1));
+    if (Number.isInteger(p) && p > 0) ports.add(p);
+  }
+  return ports;
+}
+
 // Every listening TCP port, ownership aside. Unprivileged on both platforms.
 function allListeningPorts() {
-  const ports = new Set();
-  try { // macOS/BSD: "tcp4 0 0 127.0.0.1.8899 *.* LISTEN"
-    const out = execFileSync("netstat", ["-an", "-p", "tcp"], { timeout: 6000 }).toString();
-    for (const line of out.split("\n")) {
-      if (!/\bLISTEN\b/.test(line)) continue;
-      const m = line.trim().split(/\s+/)[3];
-      const p = m && Number(m.slice(m.lastIndexOf(".") + 1));
-      if (Number.isInteger(p) && p > 0) ports.add(p);
-    }
+  let ports = new Set();
+  try { // macOS/BSD
+    ports = parseNetstatPorts(execFileSync("netstat", ["-an", "-p", "tcp"], { timeout: 6000 }).toString());
   } catch {}
   if (!ports.size) {
-    try { // Linux: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*"
-      const out = execFileSync("ss", ["-ltnH"], { timeout: 6000 }).toString();
-      for (const line of out.split("\n")) {
-        const m = line.trim().split(/\s+/)[3];
-        const p = m && Number(m.slice(m.lastIndexOf(":") + 1));
-        if (Number.isInteger(p) && p > 0) ports.add(p);
-      }
+    try { // Linux (iproute2)
+      ports = parseSsPorts(execFileSync("ss", ["-ltnH"], { timeout: 6000 }).toString());
     } catch {}
   }
   return ports;
@@ -784,19 +848,23 @@ function which(bin) {
 /* ---------- actions ---------- */
 
 // Minimal .env parser: KEY=value lines, optional `export `, quotes stripped,
-// #-comments ignored. No interpolation — this is a loader, not a shell.
-function parseEnvFile(file) {
+// #-comments ignored. No interpolation — this is a loader, not a shell — and
+// no multi-line values: a value ends at its newline, always.
+function parseEnv(text) {
   const out = {};
-  try {
-    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-      if (!m || m[2].startsWith("#")) continue;
-      let v = m[2];
-      const q = v.match(/^(['"])(.*?)\1/); // quoted value; anything after the close quote is ignored
-      out[m[1]] = q ? q[2] : v.replace(/\s+#.*$/, "");
-    }
-  } catch {}
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m || m[2].startsWith("#")) continue;
+    let v = m[2];
+    const q = v.match(/^(['"])(.*?)\1/); // quoted value; anything after the close quote is ignored
+    out[m[1]] = q ? q[2] : v.replace(/\s+#.*$/, "");
+  }
   return out;
+}
+// A missing or unreadable .env is normal, not an error: no file, no vars.
+function parseEnvFile(file) {
+  try { return parseEnv(fs.readFileSync(file, "utf8")); }
+  catch { return {}; }
 }
 
 async function startService(s, branch, force) {
@@ -1066,6 +1134,16 @@ async function restartService(s) {
    Run ANOTHER branch of a service in parallel: a git worktree gives it its
    own checkout, a free port is injected as $PORT. Instances are ephemeral
    (they do not survive daemon restarts) and live under the data dir. */
+/* A branch name becomes a directory under the data dir and a log-file name, so
+   it has to survive being a single path segment: slashes (feature/foo), spaces
+   and unicode all collapse to dashes. "." and ".." would traverse, so they are
+   rejected outright — git will not create such a branch, but a repo that
+   arrives with one must not be able to steer a path. */
+function sanitizeBranch(branch) {
+  const safe = String(branch || "").replace(/[^A-Za-z0-9._-]+/g, "-");
+  return safe === "." || safe === ".." ? "" : safe;
+}
+
 function freePortFrom(base, allow) {
   bustPortCache();
   const taken = new Set(listeningMap().keys());
@@ -1093,15 +1171,18 @@ function worktreeOf(mainDir, branch) {
    so the injected port is a request. Watch what the instance's process group
    actually binds and correct the record — the board must not claim a port
    nothing is listening on, and the proxy routes by this value. */
-function pgidMap() {
+// ps -Ao pid=,pgid= -> pid -> pgid
+function parsePgidTable(out) {
   const m = new Map();
-  try {
-    for (const line of execFileSync("ps", ["-Ao", "pid=,pgid="], { timeout: 4000 }).toString().split("\n")) {
-      const t = line.trim().split(/\s+/);
-      if (t.length === 2) m.set(Number(t[0]), Number(t[1]));
-    }
-  } catch {}
+  for (const line of out.split("\n")) {
+    const t = line.trim().split(/\s+/);
+    if (t.length === 2) m.set(Number(t[0]), Number(t[1]));
+  }
   return m;
+}
+function pgidMap() {
+  try { return parsePgidTable(execFileSync("ps", ["-Ao", "pid=,pgid="], { timeout: 4000 }).toString()); }
+  catch { return new Map(); }
 }
 async function confirmInstancePort(key, pgid, asked) {
   for (let i = 0; i < 30; i++) {
@@ -1130,7 +1211,8 @@ function startWorktree(s, branch) {
   const g = gitInfo(mainDir);
   if (!g.isGit) return { code: 400, error: "not a git repository" };
   if (!g.branches.includes(branch)) return { code: 400, error: `unknown branch '${branch}'` };
-  const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const safeBranch = sanitizeBranch(branch);
+  if (!safeBranch) return { code: 400, error: "bad branch name" };
   const key = `${s.name}@${safeBranch}`; // also the log-file name — must stay path-safe
   if (instances[key] && instLive(instances[key]))
     return { code: 409, error: `${key} is already running`, already: true };
@@ -1356,9 +1438,8 @@ const handle = async (req, res) => {
     const { name, branch } = await readBody(req);
     const s = findSvc(name);
     if (!s) return json(res, 404, { error: "unknown service" });
-    const safeBranch = String(branch || "").replace(/[^A-Za-z0-9._-]+/g, "-");
-    if (!safeBranch || safeBranch === "." || safeBranch === "..")
-      return json(res, 400, { error: "bad branch name" });
+    const safeBranch = sanitizeBranch(branch);
+    if (!safeBranch) return json(res, 400, { error: "bad branch name" });
     const key = `${name}@${safeBranch}`;
     if (instances[key] && instLive(instances[key])) return json(res, 409, { error: "stop the instance first" });
     if (instances[key] && instances[key].externalWorktree) { // not ours to delete
@@ -1752,7 +1833,7 @@ server.on("error", (e) => {
   process.exit(1);
 });
 
-server.listen(PORT, "127.0.0.1", () =>
+if (IS_MAIN) server.listen(PORT, "127.0.0.1", () =>
   console.log(`stackdeck v${VERSION} · http://localhost:${PORT} · config ${CONFIG_PATH}`)
 );
 
@@ -1876,6 +1957,7 @@ proxy.on("upgrade", (req, socket, head) => {
   socket.on("error", () => up.destroy());
 });
 (function listenProxy(ports) {
+  if (!IS_MAIN) return; // required as a library: no listeners
   if (!ports.length) { console.error("proxy: no port available — *.localhost domains disabled"); return; }
   const p = ports[0];
   proxy.once("error", (e) => {
@@ -1887,3 +1969,22 @@ proxy.on("upgrade", (req, socket, head) => {
     console.log(`*.localhost proxy on :${p}`);
   });
 })([80, 8880]);
+
+/* ---------- test surface ----------
+   Not an API. When this file is required rather than run, the pure helpers
+   above become reachable so test/ can exercise them against fixtures. This is
+   the only export in the file; as a script nothing here executes. */
+if (!IS_MAIN) module.exports = {
+  // path & name hygiene
+  expand, byName, validSvcName, validLabel, sanitizeBranch, isSystemPath,
+  // .env
+  parseEnv, parseEnvFile,
+  // port tables
+  parseLsofPortPids, parseSsPortPids,
+  parseLsofListeners, parseSsListeners,
+  parsePsTable, parsePgidTable,
+  parseNetstatPorts, parseSsPorts,
+  etimeSec,
+  // project discovery
+  gitBranchFast, inferCommand, detectProcs,
+};
