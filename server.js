@@ -1677,9 +1677,11 @@ function startWorktree(s, branch) {
     if (iso && iso.error) return { code: 409, error: `isolateDb: ${iso.error}` };
     if (iso) {
       dbEnv = { [iso.urlVar]: iso.url };
+      // Say it where the user actually is, not only in the README: this
+      // created a real database and will drop it again on remove.
       pushLog(key, iso.reused
         ? `[stackdeck] own database '${iso.db}' (kept from the last run)\n`
-        : `[stackdeck] own database '${iso.db}' (copied from '${iso.template}')\n`);
+        : `[stackdeck] own database '${iso.db}' (copied from '${iso.template}') — isolateDb is EXPERIMENTAL; this database is dropped when the worktree is removed\n`);
     }
   }
   const child = spawn("bash", ["-c", s.command], {

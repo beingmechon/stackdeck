@@ -12,6 +12,15 @@ what shipped rather than what was written down at the time.
 
 Nothing yet.
 
+## [0.12.2] — 2026-09-01
+
+### Changed
+- `isolateDb` is labelled **experimental** — in the README, on the landing
+  page, and in the log line it prints the moment it creates a database. It
+  creates and drops real databases and no human has used it yet; one afternoon
+  against one live Postgres is not the same as being used. A sharp edge is
+  fine, an unlabelled one is not.
+
 ## [0.12.1] — 2026-09-01
 
 ### Fixed
@@ -337,7 +346,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/beingmechon/stackdeck/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/beingmechon/stackdeck/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/beingmechon/stackdeck/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...v0.11.2
