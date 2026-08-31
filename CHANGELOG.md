@@ -146,9 +146,9 @@ Nothing yet.
 
 ### Added
 - Worktrees made by other tools are adopted rather than fought over. Coding
-  agents create worktrees constantly (Claude Code puts them under
-  `.claude/worktrees`), and git refuses to check the same branch out twice —
-  so Stackdeck runs the branch where it already lives.
+  agents create worktrees constantly, and git refuses to check the same branch
+  out twice — so Stackdeck runs the branch where it already lives, wherever
+  that is.
 
 ### Fixed
 - A service that ignores `$PORT` (Vite reads `vite.config`, Next reads `-p`)

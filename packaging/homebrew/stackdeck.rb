@@ -7,8 +7,8 @@
 class Stackdeck < Formula
   desc "Control panel for your local dev services: start, stop, branch, watch logs"
   homepage "https://github.com/beingmechon/stackdeck"
-  url "https://registry.npmjs.org/stackdeck/-/stackdeck-0.10.1.tgz"
-  sha256 "6c5918505b0adb33757bd98fad5dcc694c6ffc887a741eecd6fe77e9e95dbb07"
+  url "https://registry.npmjs.org/stackdeck/-/stackdeck-0.10.2.tgz"
+  sha256 "db597036ee4cee4b636dd6c1ed1ab2a9f27e657eb503659904898b0cc4a7d264"
   license "MIT"
 
   depends_on "node"

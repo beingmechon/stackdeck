@@ -6,12 +6,12 @@
 
 <img src="https://beingmechon.github.io/stackdeck/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">
 
-Coding agents make git worktrees constantly — Claude Code puts them under
-`.claude/worktrees` — and you end up with four half-finished branches, three of
-them running on ports you can no longer name. Stackdeck is the board for that.
-Pick a branch from a service's dropdown and Start checks it out; hit ⧉ and that
-branch runs in its own worktree beside your main checkout, on a free port, with
-your main copy's `.env`. If an agent already made the worktree, Stackdeck runs
+Coding agents make git worktrees constantly, and you end up with four
+half-finished branches, three of them running on ports you can no longer name.
+Stackdeck is the board for that. Pick a branch from a service's dropdown and
+Start checks it out; hit ⧉ and that branch runs in its own worktree beside your
+main checkout, on a free port, with your main copy's `.env`. If your agent
+already made a worktree for that branch — wherever it put it — Stackdeck runs
 that one instead of fighting git over it.
 
 The rest is what makes that usable day to day: it scans your projects folders,
