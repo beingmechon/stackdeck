@@ -2,17 +2,23 @@
 
 [![CI](https://github.com/beingmechon/stackdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/beingmechon/stackdeck/actions/workflows/ci.yml)
 
-**Your projects folder, as a control panel.**
+**Run two branches of the same repo side by side, each on its own port.**
 
 <img src="https://beingmechon.github.io/stackdeck/demo.gif" alt="Live logs with filtering, then running a second branch of orders-api in a parallel worktree on its own port, then switching the whole board to a light theme" width="100%">
 
-Stackdeck finds the projects in your folders, works out how to run each one,
-and puts them on a board: Start, Kill, live logs, and a branch dropdown.
+Coding agents make git worktrees constantly — Claude Code puts them under
+`.claude/worktrees` — and you end up with four half-finished branches, three of
+them running on ports you can no longer name. Stackdeck is the board for that.
+Pick a branch from a service's dropdown and Start checks it out; hit ⧉ and that
+branch runs in its own worktree beside your main checkout, on a free port, with
+your main copy's `.env`. If an agent already made the worktree, Stackdeck runs
+that one instead of fighting git over it.
+
+The rest is what makes that usable day to day: it scans your projects folders,
+works out how to run each repo across ~15 ecosystems, and puts them all on one
+board — Start, Kill, live logs, and every port on the machine, not just yours.
 One Node process, one HTML page, no dependencies, bound to 127.0.0.1, and it
 never talks to the internet.
-
-*Spiritual successor to [hotel](https://github.com/typicode/hotel)
-(unmaintained since 2019), with the git-awareness it never had.*
 
 ## Install
 
@@ -51,22 +57,26 @@ no `stackdeck` command on your PATH afterwards.
 
 ## The three things it does that other process managers don't
 
-**Run a branch, not just a repo.** Every service has a branch dropdown: pick
-one and Start checks it out first. Or hit ⧉ and that branch runs in its own
-git worktree, alongside your main checkout, with a free port and the main
-copy's `.env`. If a coding agent already made a worktree for the branch,
-Stackdeck runs that one instead of fighting git over it.
+**Run a branch, not just a repo.** The one above — and it composes with the
+rest: a worktree instance gets its own log stream, its own row, and its own
+`branch.service.localhost` address, so two branches of one API can be open in
+two tabs.
 
 **Visit it and it starts.** Turn on *start on demand* and opening
 `api.localhost` boots the service and holds the request until it's ready.
 With *idle stop*, it shuts down again once nothing has hit it for a while —
 so twenty configured services cost nothing until you open one.
 
-**Your whole projects folder, not one Procfile.** It scans your roots, detects
-git repos, and infers a run command per project across ~15 ecosystems
-(Makefile and just targets, npm/pnpm/yarn/bun scripts, Python with
-uv/poetry/pipenv, cargo, go, gradle, mix, compose, and more). A monorepo with
-several apps becomes a section of services in one click.
+**Every port on the machine, not just yours.** The Ports panel lists
+everything listening — which service owns it, the full command line, its
+directory and parent, and a two-step kill. It is how you find the dev server
+from three weeks ago squatting `:3000`. In the browser, in the TUI (`p`), and
+in the terminal:
+
+```bash
+stackdeck ports 3000     # who has it, since when, and from which directory
+stackdeck kill 54211     # only pids holding a port; never root, never sudo
+```
 
 ## It never talks to the internet
 
@@ -94,39 +104,32 @@ service (it normally is `http://localhost:…`) and there is nothing else.
 - **Stacks that start in order** — `dependsOn` waits for each dependency to be
   *ready*: a log-line regex, an HTTP check, or its port opening.
 - **Honest status** — running state comes from pid *and* port. Services you
-  started elsewhere show as `external`. Killing something a supervisor
-  restarts says so instead of pretending. Killing the daemon leaves your
-  services running; a restarted daemon re-adopts them.
-- **Crash handling** — `restart: on-failure` backs off exponentially, and
-  unexpected exits get a badge and a browser notification.
-- ***.localhost domains** — a built-in reverse proxy, WebSockets included, so
-  `api.localhost` beats remembering ports. Browsers resolve `*.localhost`
-  natively: no /etc/hosts, no PAC file.
+  started elsewhere show as `external`, killing something a supervisor
+  restarts says so rather than pretending, and killing the daemon leaves your
+  services running for a restarted one to re-adopt.
+- **Crash handling** — `restart: on-failure` backs off exponentially; unexpected
+  exits get a badge and a browser notification.
+- ***.localhost domains** — a built-in reverse proxy, WebSockets included.
+  Browsers resolve `*.localhost` natively: no /etc/hosts, no PAC file.
 - **Port conflicts, handled** — if something else holds the port, Start names
   the pid and offers to evict it.
-- **Every port on the machine** — everything listening, not just what you
-  configured: which service owns it, the full command, its directory and
-  parent, and a two-step kill. It's how you find the dev server from three
-  weeks ago squatting `:3000`. In the browser, in the TUI (`p`), and in the
-  terminal:
-
-  ```bash
-  stackdeck ports 3000     # who has it, since when, and from which directory
-  stackdeck kill 54211     # only pids holding a port; never root, never sudo
-  ```
-- **Databases without Docker** — detects Postgres, MySQL, MongoDB, Redis,
-  Elasticsearch, RabbitMQ, NATS, MinIO, Temporal, ClickHouse and friends on
-  your machine, and runs them as ordinary services with streamed logs.
-- **A terminal board too** — `stackdeck tui` gives you the same thing without
-  leaving the terminal: navigate, start, kill, restart, filter, and stream
-  logs in a split pane, plus `p` for the same port table. Same daemon, so the
-  browser stays in sync.
+- **Ecosystem detection** — a run command inferred per project across ~15 of
+  them: Makefile and just targets, npm/pnpm/yarn/bun, Deno, Python with
+  uv/poetry/pipenv/pdm, Django, cargo, go, zig, swift, dotnet, gradle, maven,
+  Rails, Rack, Laravel, composer, mix, flutter, stack, and `docker compose`
+  last. A monorepo becomes a section of services in one click.
+- **Databases without Docker** — Postgres, MySQL, MongoDB, Redis,
+  Elasticsearch, RabbitMQ, NATS, MinIO, Temporal, ClickHouse and friends,
+  detected on your machine and run as ordinary services with streamed logs.
+- **A terminal board too** — `stackdeck tui`: navigate, start, kill, restart,
+  filter, stream logs in a split pane, plus `p` for the same port table. Same
+  daemon, so the browser stays in sync.
 - **CLI and MCP** — `stackdeck status|start|stop|restart|logs|ports|kill`, plus
   `stackdeck mcp` so coding agents can drive your dev environment themselves,
   including `whats_on_port` so an agent stops retrying a start that can never
   bind.
-- **Themes** — calm, playful, austere, or a custom one you build from a few
-  sliders in settings (a full light theme is one drag).
+- **Themes** — calm, playful, austere, or a custom one built from a few
+  sliders (a full light theme is one drag).
 
 Keyboard-operable throughout, WCAG AA contrast, respects reduced motion.
 
@@ -219,6 +222,15 @@ you visit could start that service.
 - **Unix only** (bash, process groups, lsof/ss). The `.env` loader is
   deliberately minimal: flat `KEY=value`, quotes and `#` comments, no
   interpolation.
+- **WSL2**: expected to work, not yet confirmed by anyone running it. WSL2 is
+  Linux, and every path that depends on a macOS tool already falls back —
+  `lsof` and `netstat` are usually absent there, and `ss` covers both. WSL
+  forwards 127.0.0.1 binds to Windows, so the board should be at
+  `localhost:8899` in your Windows browser. Two caveats: `stackdeck` opens
+  the browser through `wslview` or `explorer.exe` and prints the URL if
+  neither is there, and **`*.localhost` proxying is untested under WSL2** —
+  binding `:80` needs root inside the distro, so it falls back to `:8880` and
+  you would need `api.localhost:8880`. Reports welcome either way.
 </details>
 
 <details>
@@ -254,11 +266,28 @@ It changes nothing else — same behaviour, same exit codes, just louder. **Put
 this output in any bug report**; it is the single most useful thing for
 working out what happened on a machine that isn't mine.
 
+## Prior art
+
+Spiritual successor to [hotel](https://github.com/typicode/hotel), which did
+the `*.localhost` proxy and the start-things-for-me part well and has been
+unmaintained since 2019. Stackdeck adds the git-awareness it never had, which
+turned out to be the interesting half. Also in the neighbourhood: Foreman and
+Overmind (one Procfile, no UI), Docker Compose (containers, not your host),
+and Laravel Herd or DBngin (excellent, macOS and PHP-shaped).
+
 ## Status
 
-Early, but a solid daily driver — two files you can read in an evening, which
-is the point for something that runs shell commands. No tests yet. Issues and
-PRs welcome.
+Early — ten days old, one maintainer, and the version numbers move fast. It
+is a solid daily driver and I use it every day, but treat the shape of things
+as still settling before 1.0.
+
+What that means concretely: `server.js` and `index.html` are two files you can
+read in an evening, which is the point for something that runs shell commands.
+The parsers and detectors have a test suite ([`test/`](test/)) that runs on
+Ubuntu and macOS across Node 18, 20 and 22; the UI does not, and neither does
+the process-management path — those get exercised by using it. Issues and PRs
+welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) first, and
+[CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## License
 
