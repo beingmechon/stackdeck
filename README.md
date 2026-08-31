@@ -221,6 +221,11 @@ Everything lives in `~/.config/stackdeck/config.json` (or
   "categoryOrder": ["Products", "Tools"],     // order of project categories
   "groups": ["Stack A"],                      // your service sections
   "theme": "playful",                         // or austere / custom
+  // Set from the UI, listed here so they are discoverable rather than folklore:
+  "excludes": ["~/Projects/scratch"],         // folders the scan skips
+  "projectCategories": { "web": "Products" }, // project name -> category
+  "hiddenGroups": [], "hiddenCategories": [], // collapsed out of the board
+  "themeTokens": { "hue": 75, "radius": 7 },  // only when theme is "custom"
   "services": [
     {
       "name": "api",
@@ -232,8 +237,13 @@ Everything lives in `~/.config/stackdeck/config.json` (or
       "dependsOn": ["db"],                     // started (and ready) first
       "readyWhen": { "log": "Listening on" },  // or { "http": "…" }; default: port opens
       "linkDirs": ["node_modules"],            // symlink these into a worktree
-                                               // instead of copying; [] or omit
-                                               // to detect, false to disable
+                                               // instead of copying; omit to
+                                               // detect, false to disable
+      "isolateDb": true,                       // a worktree gets its own copy
+                                               // of the Postgres database
+      "envFile": ".env.local",                 // which env file to auto-load;
+                                               // false to load none
+      "hidden": true                           // keep it off the board
       "restart": "on-failure",                 // exponential backoff, 5 tries
       "onDemand": true,                        // boot it when api.localhost is visited
       "idleAfter": 30                          // stop it again after 30 idle minutes

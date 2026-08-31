@@ -1287,6 +1287,133 @@ function sanitizeBranch(branch) {
   return safe === "." || safe === ".." || safe.startsWith("-") ? "" : safe;
 }
 
+/* ---------- per-worktree Postgres isolation ----------
+   Two worktrees of one repo share a dev database, so an agent running a
+   destructive migration on its branch corrupts the main checkout's data.
+   Stackdeck already runs Postgres as an ordinary service, so it can give a
+   branch its own copy instead of string-swapping a URL and hoping.
+
+   Postgres only, this pass. MySQL has no TEMPLATE equivalent (it needs a
+   dump/restore or per-schema tricks), Mongo would be a per-database prefix,
+   Redis a numbered DB index, and compose would be COMPOSE_PROJECT_NAME —
+   each is a different mechanism, not a parameter of this one. */
+
+/* A database name Postgres will accept unquoted: lowercase, [a-z0-9_], 63
+   bytes, never leading with a digit. The sd_ prefix guarantees the leading
+   character and makes provenance obvious in \l — but it is NOT what
+   authorises a drop; only the on-disk record does that. */
+function pgIdent(svc, branch, taken = new Set()) {
+  const clean = (x) => String(x == null ? "" : x).toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+  const base = `sd_${clean(svc)}_${clean(branch)}`.replace(/_+/g, "_").replace(/_+$/, "");
+  // Cleaning leaves ASCII only, so length is byte length.
+  const fit = (n, room) => (n.length <= room ? n : n.slice(0, room).replace(/_+$/, ""));
+  // A truncated name loses what made it unique, so carry a digest of the full
+  // pair rather than letting two long branches collide silently.
+  const digest = crypto.createHash("sha1").update(`${svc}\u0000${branch}`).digest("hex").slice(0, 6);
+  let name = base.length <= 63 ? base : `${fit(base, 63 - 7)}_${digest}`;
+  for (let i = 2; taken.has(name); i++) {
+    const suffix = `_${i}`;
+    name = `${fit(base.length <= 63 - suffix.length ? base : fit(base, 63 - 7 - suffix.length) + "_" + digest, 63 - suffix.length)}${suffix}`;
+  }
+  return name;
+}
+
+/* Swap the database out of a connection URL, keeping everything else — user,
+   password, host, port, and the query options that carry sslmode and
+   friends. Returns null when there is nothing usable to rewrite, so the
+   caller can say so instead of inventing a URL. */
+function rewriteDbUrl(url, dbName) {
+  if (typeof url !== "string" || !url) return null;
+  try {
+    const u = new URL(url);
+    if (!/^postgres(ql)?:$/.test(u.protocol)) return null;
+    u.pathname = `/${dbName}`;
+    return u.toString();
+  } catch (e) { swallow("rewriteDbUrl", e); return null; }
+}
+
+/* Which databases WE made. Only names in here are ever dropped, so a config
+   change between create and teardown cannot turn a drop into someone else's
+   production data. Keyed by instance so teardown needs no config at all. */
+const DBS_PATH = path.join(HOME_DIR, "databases.json");
+const readDbs = () => {
+  try { return JSON.parse(fs.readFileSync(DBS_PATH, "utf8")) || {}; }
+  catch (e) { swallow("isolateDb:read-record", e); return {}; }
+};
+const writeDbs = (o) => {
+  try { fs.writeFileSync(DBS_PATH, JSON.stringify(o, null, 2) + "\n", { mode: 0o600 }); }
+  catch (e) { swallow("isolateDb:write-record", e); }
+};
+
+// psql is how this talks to Postgres — there is no driver, and there will not
+// be one. Runs against the SERVER, not the target database.
+function psql(conn, sql) {
+  try {
+    const out = execFileSync("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", conn, "-c", sql],
+      { timeout: 30000, env: { ...process.env, PATH: SHELL_PATH }, stdio: ["ignore", "pipe", "pipe"] });
+    return { ok: true, out: out.toString().trim() };
+  } catch (e) {
+    return { ok: false, out: ((e.stderr || e.stdout || e.message) || "").toString().trim() };
+  }
+}
+
+/* Give a branch its own copy of the dev database.
+
+   CREATE DATABASE ... TEMPLATE is a file-level copy, so it is fast — but it
+   fails outright if ANY session is connected to the source, which in practice
+   means it fails whenever the app you are branching from is running. That is
+   the common case, not the edge case, so the error says what to do about it
+   rather than passing Postgres's wording through. */
+function isolateDb(s, branch, key) {
+  const cfgIso = s.isolateDb;
+  if (!cfgIso) return null;
+  const opts = cfgIso === true ? {} : cfgIso;
+  const urlVar = opts.urlVar || "DATABASE_URL";
+  const sourceUrl = opts.from || (s.env || {})[urlVar] || process.env[urlVar] || null;
+  if (!sourceUrl) return { error: `isolateDb needs ${urlVar} to exist — set it in the service's env or its .env` };
+
+  let source;
+  try { source = new URL(sourceUrl).pathname.replace(/^\//, ""); }
+  catch (e) { swallow("isolateDb:parse-source", e); return { error: `${urlVar} is not a URL this can rewrite` }; }
+  if (!source) return { error: `${urlVar} has no database name in it` };
+
+  // Say it plainly rather than quietly doing nothing: isolation was asked for.
+  if (!which("psql")) return { error: "isolateDb needs psql on PATH, and it is not installed" };
+  const admin = rewriteDbUrl(sourceUrl, opts.adminDb || "postgres");
+  if (!admin) return { error: `${urlVar} is not a postgres:// URL` };
+  if (!psql(admin, "SELECT 1").ok)
+    return { error: `cannot reach Postgres at ${new URL(sourceUrl).host} — isolation was requested but the database is not reachable from here` };
+
+  const record = readDbs();
+  const taken = new Set(Object.values(record).map((r) => r.db));
+  const db = pgIdent(s.name, branch, taken);
+  const template = opts.template || source;
+
+  const made = psql(admin, `CREATE DATABASE "${db}" TEMPLATE "${template}"`);
+  if (!made.ok) {
+    if (/being accessed by other users|source database.*in use/i.test(made.out))
+      return { error: `cannot copy '${template}' while something is connected to it. Stop the main checkout's service first, or point isolateDb.template at a dedicated template database that nothing runs against.` };
+    if (/already exists/i.test(made.out)) { /* ours from a crashed run; reuse it */ }
+    else return { error: `CREATE DATABASE failed: ${made.out.split("\n").pop()}` };
+  }
+  record[key] = { db, at: Date.now(), svc: s.name, branch, admin };
+  writeDbs(record);
+  const url = rewriteDbUrl(sourceUrl, db);
+  return { db, url, urlVar, template };
+}
+
+// Only ever drops a name this daemon recorded creating.
+function dropIsolatedDb(key) {
+  const record = readDbs();
+  const r = record[key];
+  if (!r) return null;
+  const gone = psql(r.admin, `DROP DATABASE IF EXISTS "${r.db}"`);
+  if (!gone.ok) return { error: `DROP DATABASE ${r.db}: ${gone.out.split("\n").pop()}` };
+  delete record[key];
+  writeDbs(record);
+  return { dropped: r.db };
+}
+
 /* Symlink a new worktree's heavy directories back at the main checkout, so a
    branch costs a checkout rather than another node_modules. A reported case
    put five worktrees at 9.82 GB in twenty minutes.
@@ -1523,9 +1650,22 @@ function startWorktree(s, branch) {
   }
   const fileEnv = envFile ? parseEnvFile(envFile) : {};
   if (envFile && envFile.startsWith(mainDir)) pushLog(key, `[stackdeck] using .env from the main checkout\n`);
+
+  /* Its own database, layered over the inherited .env by the SAME spread that
+     handles everything else — the branch must not share the main checkout's
+     data with an agent running migrations against it. */
+  let dbEnv = {};
+  if (s.isolateDb) {
+    const iso = isolateDb(s, branch, key);
+    if (iso && iso.error) return { code: 409, error: `isolateDb: ${iso.error}` };
+    if (iso) {
+      dbEnv = { [iso.urlVar]: iso.url };
+      pushLog(key, `[stackdeck] own database '${iso.db}' (copied from '${iso.template}')\n`);
+    }
+  }
   const child = spawn("bash", ["-c", s.command], {
     cwd: wtDir,
-    env: { ...process.env, PATH: SHELL_PATH, ...fileEnv, ...(s.env || {}), ...(port ? { PORT: String(port) } : {}) },
+    env: { ...process.env, PATH: SHELL_PATH, ...fileEnv, ...(s.env || {}), ...dbEnv, ...(port ? { PORT: String(port) } : {}) },
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -1776,12 +1916,14 @@ const handle = async (req, res) => {
       return json(res, 200, { ok: true, note: "that worktree was made outside Stackdeck — removed from the board, left on disk" });
     }
     delete instances[key];
+    // Only ever drops a name we recorded creating; safe even if the config changed.
+    const dropped = dropIsolatedDb(key);
     const wtDir = path.join(DATA_HOME, "worktrees", name, safeBranch);
     const r = git(svcDir(s), "worktree", "remove", "--force", "--end-of-options", wtDir);
     git(svcDir(s), "worktree", "prune");
     saveProcs();
     if (!r.ok && fs.existsSync(wtDir)) return json(res, 500, { error: `git worktree remove: ${r.out.split("\n").pop()}` });
-    return json(res, 200, { ok: true });
+    return json(res, 200, { ok: true, ...(dropped || {}) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/infra")
@@ -2083,6 +2225,22 @@ const handle = async (req, res) => {
     s.dir = b.dir.trim(); s.command = b.command.trim();
     s.port = b.port;
     s.env = b.env !== undefined ? b.env : (s.env || {});
+    if (b.isolateDb !== undefined) {
+      if (b.isolateDb === false || b.isolateDb === null) delete s.isolateDb;
+      else if (b.isolateDb === true) s.isolateDb = true;
+      else if (b.isolateDb && typeof b.isolateDb === "object" && !Array.isArray(b.isolateDb)) {
+        const o = {};
+        for (const k of ["urlVar", "from", "template", "adminDb"]) {
+          if (b.isolateDb[k] === undefined) continue;
+          if (typeof b.isolateDb[k] !== "string" || b.isolateDb[k].length > 512)
+            return json(res, 400, { error: `isolateDb.${k} must be a string` });
+          o[k] = b.isolateDb[k];
+        }
+        if (o.urlVar && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(o.urlVar))
+          return json(res, 400, { error: "isolateDb.urlVar must be a valid environment variable name" });
+        s.isolateDb = Object.keys(o).length ? o : true;
+      } else return json(res, 400, { error: "isolateDb must be true, false, or an object" });
+    }
     if (b.linkDirs !== undefined) { // false disables linking; an array replaces detection
       if (b.linkDirs === false) s.linkDirs = false;
       else if (Array.isArray(b.linkDirs)) {
@@ -2343,6 +2501,8 @@ if (!IS_MAIN) module.exports = {
   gitBranchFast, inferCommand, detectProcs,
   // worktree heavy-directory linking
   detectEcosystems, heavyDirsFor, linkHeavyDirs, excludeLinkedDirs, humanSize, HEAVY_DIRS,
+  // per-worktree database isolation
+  pgIdent, rewriteDbUrl,
   parseWorktreeList,
   // readiness probing
   waitReadyFor, readyTimeout,

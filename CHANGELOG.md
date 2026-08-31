@@ -10,6 +10,18 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
+### Added
+- Per-worktree Postgres isolation (`isolateDb`). A branch gets its own copy of
+  the dev database via `CREATE DATABASE ... TEMPLATE`, and the rewritten URL is
+  layered over the inherited `.env` by the same spread that handles everything
+  else. Dropped when the worktree is removed — and only ever a name recorded in
+  the state dir, so a config change between create and teardown cannot turn a
+  drop into someone else's data. Postgres only; MySQL, Mongo, Redis and compose
+  namespacing each need a different mechanism, not a parameter of this one.
+- Every config key the daemon reads is now in the README's config block.
+  `envFile`, `excludes`, `hidden`, `hiddenGroups`, `hiddenCategories`,
+  `projectCategories` and `themeTokens` were implemented and undiscoverable.
+
 ### Changed
 - npm keywords caught up with what this is: `git-worktree`, `worktree`, `mcp`,
   `mcp-server`, `ai-agent`. They still described a Procfile runner.
