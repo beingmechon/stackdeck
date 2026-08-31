@@ -182,6 +182,15 @@ env server-side, caps bodies at 1MB, and limits the folder browser to your
 home and configured roots. Config writes are atomic; a corrupt config is set
 aside, never fatal. **Do not port-forward the daemon off your machine.**
 
+**Known limitation, stated plainly:** the token is substituted into the HTML
+when the daemon serves the page, so it is present in the DOM. Any browser
+extension with host access to localhost can read it, and would then have the
+same access to the API that you do. The alternatives — an httpOnly cookie, or
+a second fetch to collect the token — each trade this for a different problem
+on a tool that only ever serves one page to one user, so this one is accepted
+rather than solved. If you run extensions you do not trust, that is worth
+knowing before you run this.
+
 The `*.localhost` proxy is unauthenticated by design — your browser needs it —
 and forwards only to ports of services you configured. It does make those
 reachable at guessable names from any site you visit (same-origin still blocks

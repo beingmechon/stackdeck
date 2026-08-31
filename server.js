@@ -176,6 +176,21 @@ try {
 
 /* ---------- helpers ---------- */
 
+/* A branch name reaches git as a positional operand, and git parses options
+   ANYWHERE before `--`. So a branch literally named `--upload-pack=/tmp/x`
+   would be read as an OPTION, not a name. git refuses to create such a
+   branch, but a ref can be forced in by writing .git/refs/heads/ directly,
+   and for-each-ref then lists it — which is enough to pass the "is this a
+   real local branch" check both call sites already do.
+
+   `--end-of-options` (git >= 2.24) stops option parsing while keeping the
+   operand a revision. Note that the obvious-looking `git checkout -- <name>`
+   is NOT the fix: that means "restore this PATH", and would stop branch
+   switching working at all. The trailing `--` on checkout is the separate
+   guard, against a branch whose name is also a filename in the tree. */
+const checkoutArgs = (branch) => ["checkout", "--end-of-options", branch, "--"];
+const worktreeAddArgs = (dir, branch) => ["worktree", "add", "--end-of-options", dir, branch];
+
 function git(dir, ...args) {
   try {
     return { ok: true, out: execFileSync("git", ["-C", dir, ...args], { timeout: 8000 }).toString().trim() };
@@ -953,7 +968,7 @@ async function startService(s, branch, force) {
     if (branch !== g.branch) {
       if ((git(dir, "status", "--porcelain").out || "") !== "")
         return { code: 409, error: `cannot switch to '${branch}': working tree has uncommitted changes` };
-      const co = git(dir, "checkout", branch);
+      const co = git(dir, ...checkoutArgs(branch));
       if (!co.ok) return { code: 500, error: `git checkout ${branch} failed: ${co.out}` };
       gitCache.delete(dir);
       pushLog(s.name, `[stackdeck] checked out branch '${branch}'\n`);
@@ -1286,10 +1301,10 @@ function startWorktree(s, branch) {
     adopted = true;
   } else if (!fs.existsSync(wtDir)) {
     fs.mkdirSync(path.dirname(wtDir), { recursive: true });
-    let r = git(mainDir, "worktree", "add", wtDir, branch);
+    let r = git(mainDir, ...worktreeAddArgs(wtDir, branch));
     if (!r.ok) { // a hand-deleted worktree leaves stale metadata that blocks re-adding
       git(mainDir, "worktree", "prune");
-      r = git(mainDir, "worktree", "add", wtDir, branch);
+      r = git(mainDir, ...worktreeAddArgs(wtDir, branch));
     }
     if (!r.ok) {
       try { fs.rmdirSync(path.dirname(wtDir)); } catch (e) { swallow("startWorktree:cleanup", e); } // only removes if empty
@@ -1378,6 +1393,18 @@ const handle = async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/") {
+    /* The token is substituted into the page source, which means it lives in
+       the DOM and any browser extension with localhost host access can read
+       it. That is a real, accepted limitation, not an oversight — it is
+       written up in the README's security model rather than hidden.
+
+       The alternatives were weighed and are not clearly better here: an
+       httpOnly cookie stops JS reading it but is then attached to every
+       request the browser makes to this origin, including ones the proxy
+       forwards; a second fetch to collect the token puts it in JS memory
+       instead, which the same extension can also reach. For a tool serving
+       one page to one local user, none of that moves the needle against the
+       actual threat, so the simple version stays. */
     res.writeHead(200, { "Content-Type": "text/html" });
     return res.end(fs.readFileSync(path.join(ROOT, "index.html"), "utf8").replace("__STACKDECK_TOKEN__", TOKEN));
   }
@@ -1509,7 +1536,7 @@ const handle = async (req, res) => {
     }
     delete instances[key];
     const wtDir = path.join(DATA_HOME, "worktrees", name, safeBranch);
-    const r = git(svcDir(s), "worktree", "remove", "--force", wtDir);
+    const r = git(svcDir(s), "worktree", "remove", "--force", "--end-of-options", wtDir);
     git(svcDir(s), "worktree", "prune");
     saveProcs();
     if (!r.ok && fs.existsSync(wtDir)) return json(res, 500, { error: `git worktree remove: ${r.out.split("\n").pop()}` });
@@ -2037,6 +2064,8 @@ proxy.on("upgrade", (req, socket, head) => {
 if (!IS_MAIN) module.exports = {
   // path & name hygiene
   expand, byName, validSvcName, validLabel, sanitizeBranch, isSystemPath,
+  // git argv construction (branch names are operands, never options)
+  checkoutArgs, worktreeAddArgs,
   // .env
   parseEnv, parseEnvFile,
   // port tables

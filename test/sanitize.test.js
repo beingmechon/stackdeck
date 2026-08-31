@@ -11,7 +11,7 @@ const path = require("node:path");
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "stackdeck-sanitize-"));
 process.env.STACKDECK_HOME = HOME;
 process.env.STACKDECK_NO_LISTEN = "1"; // helpers only: do not start the daemon
-const { sanitizeBranch, validSvcName, validLabel } = require("../server.js");
+const { sanitizeBranch, validSvcName, validLabel, checkoutArgs, worktreeAddArgs } = require("../server.js");
 after(() => fs.rmSync(HOME, { recursive: true, force: true }));
 
 /* ---------- sanitizeBranch ---------- */
@@ -93,6 +93,36 @@ test("the sanitized name is always a single, non-escaping path segment", () => {
     const joined = path.resolve(base, safe);
     assert.strictEqual(path.dirname(joined), base, `${b} escaped to ${joined}`);
   }
+});
+
+/* ---------- git argv: a branch is an operand, never an option ---------- */
+
+test("a branch beginning with '-' cannot be interpreted as a git flag", () => {
+  // git parses options anywhere BEFORE `--`, so position alone is no
+  // protection: `git checkout --force` would run --force as an option.
+  // --end-of-options is what stops that, and it must come before the name.
+  for (const hostile of ["--upload-pack=/tmp/x", "--force", "-f", "--exec=id"]) {
+    for (const argv of [checkoutArgs(hostile), worktreeAddArgs("/tmp/wt", hostile)]) {
+      const stop = argv.indexOf("--end-of-options");
+      assert.notStrictEqual(stop, -1, `${argv[0]} must pass --end-of-options`);
+      assert.ok(stop < argv.indexOf(hostile), `${hostile} must come after --end-of-options`);
+    }
+  }
+});
+
+test("checkoutArgs keeps the operand a revision, not a pathspec", () => {
+  // `git checkout -- main` means "restore the PATH main" and does not switch
+  // branches at all. The separator has to trail the name, not lead it.
+  assert.deepStrictEqual(checkoutArgs("main"), ["checkout", "--end-of-options", "main", "--"]);
+  const argv = checkoutArgs("main");
+  assert.ok(argv.indexOf("main") < argv.lastIndexOf("--"), "the name must precede the pathspec separator");
+});
+
+test("worktreeAddArgs puts the path before the branch", () => {
+  assert.deepStrictEqual(
+    worktreeAddArgs("/data/worktrees/api/feature-x", "feature/x"),
+    ["worktree", "add", "--end-of-options", "/data/worktrees/api/feature-x", "feature/x"],
+  );
 });
 
 /* ---------- validSvcName ---------- */
