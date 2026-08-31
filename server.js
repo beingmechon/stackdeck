@@ -703,12 +703,12 @@ function detectProcs(dir) {
   try {
     // A Procfile is an explicit, authoritative process list — it wins outright.
     for (const pf of ["Procfile.dev", "Procfile"]) if (has(pf)) {
-      const procs = [];
+      const fromProcfile = []; // not `procs`: that is the module-level running-process map
       for (const line of read(pf).split("\n")) {
         const m = line.match(/^([A-Za-z0-9_-]+):\s*(.+?)\s*$/);
-        if (m && !m[2].startsWith("#")) procs.push({ name: m[1], command: m[2], dir });
+        if (m && !m[2].startsWith("#")) fromProcfile.push({ name: m[1], command: m[2], dir });
       }
-      if (procs.length > 1) return procs;
+      if (fromProcfile.length > 1) return fromProcfile;
     }
 
     const pkg = has("package.json") ? readJson("package.json") : null;
@@ -1295,10 +1295,13 @@ function startWorktree(s, branch) {
   if (existing && path.resolve(existing) === path.resolve(mainDir))
     return { code: 409, error: `'${branch}' is checked out in the main copy — Start it there, or pick another branch` };
   let wtDir = path.join(DATA_HOME, "worktrees", s.name, safeBranch);
-  let adopted = false;
+  // Named for the field it becomes, and NOT `adopted`: that is the
+  // module-level map of services inherited from a previous daemon, and a
+  // local of the same name here would shadow it for anything added later.
+  let externalWorktree = false;
   if (existing && path.resolve(existing) !== path.resolve(wtDir) && fs.existsSync(existing)) {
     wtDir = existing; // someone else's worktree for this branch: run it where it lives
-    adopted = true;
+    externalWorktree = true;
   } else if (!fs.existsSync(wtDir)) {
     fs.mkdirSync(path.dirname(wtDir), { recursive: true });
     let r = git(mainDir, ...worktreeAddArgs(wtDir, branch));
@@ -1337,13 +1340,13 @@ function startWorktree(s, branch) {
   child.stderr.on("data", (d) => pushLog(key, d));
   child.on("error", (e) => { pushLog(key, `[stackdeck] failed to start: ${e.message}\n`); delete instances[key]; saveProcs(); });
   child.on("exit", (code, sig) => { pushLog(key, `[stackdeck] exited (code=${code} signal=${sig})\n`); delete instances[key]; saveProcs(); });
-  instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now(), externalWorktree: adopted };
+  instances[key] = { svc: s.name, branch, dir: wtDir, port, child, startedAt: Date.now(), externalWorktree };
   saveProcs();
   confirmInstancePort(key, child.pid, port); // $PORT is a request, not a guarantee
   // shorten $HOME in the banner — log panes end up in screenshots and screen shares
   const wtShort = wtDir.startsWith(os.homedir()) ? "~" + wtDir.slice(os.homedir().length) : wtDir;
-  pushLog(key, `[stackdeck] ${adopted ? "existing worktree (made outside Stackdeck)" : "worktree instance"}: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtShort}\n`);
-  return { code: 200, ok: true, key, port, pid: child.pid, externalWorktree: adopted };
+  pushLog(key, `[stackdeck] ${externalWorktree ? "existing worktree (made outside Stackdeck)" : "worktree instance"}: branch '${branch}'${port ? `, PORT=${port}` : ""}, ${wtShort}\n`);
+  return { code: 200, ok: true, key, port, pid: child.pid, externalWorktree };
 }
 
 /* ---------- http ---------- */
