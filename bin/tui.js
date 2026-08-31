@@ -354,8 +354,16 @@ module.exports = function runTui({ BASE, authHeaders, token }) {
       case "/": filtering = true; filter = ""; return render();
       case "o": {
         const { spawn } = require("child_process");
-        const opener = process.platform === "darwin" ? "open" : "xdg-open";
-        try { spawn(opener, [BASE], { detached: true, stdio: "ignore" }).unref(); say("opened the board in your browser"); } catch {}
+        // WSL2: xdg-open is usually absent and opens nothing when present.
+        const wsl = !!process.env.WSL_DISTRO_NAME ||
+          (() => { try { return /microsoft/i.test(require("fs").readFileSync("/proc/version", "utf8")); } catch { return false; } })();
+        const opener = process.platform === "darwin" ? "open" : wsl ? "wslview" : "xdg-open";
+        try {
+          const c = spawn(opener, [BASE], { detached: true, stdio: "ignore" });
+          c.on("error", () => { if (wsl) try { spawn("explorer.exe", [BASE], { detached: true, stdio: "ignore" }).unref(); } catch {} });
+          c.unref();
+          say("opened the board in your browser");
+        } catch {}
         return;
       }
       case "\r": case "\n": {

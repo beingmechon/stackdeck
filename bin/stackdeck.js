@@ -86,9 +86,26 @@ const age = (s) => s == null ? "" :
   s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + "m" :
   s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
 
+/* WSL2 is Linux, but the browser is not: xdg-open there is usually absent,
+   and opens nothing useful when it is present. wslview (from wslu) is the
+   polite way across; explorer.exe always works and always exits non-zero, so
+   its exit code is ignored rather than trusted. Falling back to printing the
+   URL is the honest last resort — the board is still reachable. */
+const isWSL = () => !!process.env.WSL_DISTRO_NAME ||
+  (() => { try { return /microsoft/i.test(fs.readFileSync("/proc/version", "utf8")); } catch { return false; } })();
+
 function openBrowser(url) {
-  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-  try { execFileSync(cmd, [url], { stdio: "ignore" }); } catch { console.log(url); }
+  const openers = process.platform === "darwin" ? ["open"]
+                : isWSL() ? ["wslview", "explorer.exe"]
+                : ["xdg-open"];
+  for (const cmd of openers) {
+    try { execFileSync(cmd, [url], { stdio: "ignore" }); return; }
+    catch (e) {
+      if (e.code === "ENOENT") continue;          // not installed: try the next one
+      if (cmd === "explorer.exe") return;         // it opened; it just says otherwise
+    }
+  }
+  console.log(url);
 }
 
 const USAGE = `stackdeck ${VERSION} — your projects folder, as a control panel

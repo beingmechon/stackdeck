@@ -172,6 +172,15 @@ test("parseNetstatPorts ignores ESTABLISHED rows and headers", () => {
   assert.strictEqual(ports.has(443), false);
 });
 
+test("Linux net-tools output yields nothing, so the ss fallback runs", () => {
+  // allListeningPorts tries netstat first (macOS/BSD format) and only falls
+  // through to `ss` when netstat produced no ports. On Linux — WSL2 included
+  // — net-tools prints "0.0.0.0:22", where the port follows a COLON, so this
+  // parser correctly matches nothing and the fallback takes over. Pinned
+  // because a parser that half-matched here would silently shadow ss.
+  assert.strictEqual(parseNetstatPorts(fixture("netstat-linux.txt")).size, 0);
+});
+
 test("parseNetstatPorts on empty input returns an empty set", () => {
   assert.strictEqual(parseNetstatPorts("").size, 0);
 });
