@@ -10,6 +10,10 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.11.1] — 2026-08-31
+
 ### Added
 - A Claude Code skill at `skills/stackdeck/`, shipped in the package. Tools
   tell an agent what it *can* do; the skill tells it that `start_service`
@@ -288,7 +292,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/beingmechon/stackdeck/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/beingmechon/stackdeck/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/beingmechon/stackdeck/compare/v0.10.1...v0.10.2
