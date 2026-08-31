@@ -21,6 +21,14 @@ what shipped rather than what was written down at the time.
   `.git/info/exclude`, because a `.gitignore` written `node_modules/` does not
   match a symlink and the worktree would otherwise show it as untracked.
   `linkDirs: [...]` replaces the detected list; `linkDirs: false` turns it off.
+- MCP gets `list_worktrees`, `start_worktree` and `stop_worktree`. An agent
+  could start services but not the parallel branch it had just made a worktree
+  for, which is the one capability the project is built around.
+  `list_worktrees` reports every worktree of a repo wherever it lives and
+  whatever created it, and marks which Stackdeck may remove — an agent must
+  not clean up a directory another agent is working in.
+- `GET /api/worktrees?name=<service>` behind it, listing worktrees with their
+  provenance and whether anything is serving them.
 
 ## [0.10.3] — 2026-08-31
 

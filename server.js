@@ -1378,16 +1378,32 @@ function freePortFrom(base, allow) {
 // Where (if anywhere) a branch is already checked out. Coding agents make
 // worktrees too (Claude Code puts them under .claude/worktrees), and git
 // refuses to check the same branch out twice — so we adopt theirs instead.
-function worktreeOf(mainDir, branch) {
-  const out = git(mainDir, "worktree", "list", "--porcelain").out || "";
+/* git worktree list --porcelain: blank-line-separated records, each starting
+   with "worktree <path>", then HEAD/branch, or "bare", or "detached". The
+   paths are absolute and git tracks them wherever they are, which is the
+   whole reason a worktree another tool made anywhere on disk is visible to
+   us at all. */
+function parseWorktreeList(out) {
+  const list = [];
   let cur = null;
-  for (const line of out.split("\n")) {
-    if (line.startsWith("worktree ")) cur = line.slice("worktree ".length).trim();
-    else if (line.startsWith("branch ") && cur) {
-      if (line.slice("branch ".length).trim().replace(/^refs\/heads\//, "") === branch) return cur;
-    } else if (!line.trim()) cur = null;
+  const flush = () => { if (cur) list.push(cur); cur = null; };
+  for (const line of String(out).split("\n")) {
+    if (line.startsWith("worktree ")) {
+      flush();
+      cur = { dir: line.slice("worktree ".length).trim(), branch: null, head: null, bare: false, detached: false };
+    } else if (!cur) continue;
+    else if (line.startsWith("branch ")) cur.branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+    else if (line.startsWith("HEAD ")) cur.head = line.slice("HEAD ".length).trim();
+    else if (line.trim() === "bare") cur.bare = true;
+    else if (line.trim() === "detached") cur.detached = true;
   }
-  return null;
+  flush();
+  return list;
+}
+const worktreesOf = (mainDir) => parseWorktreeList(git(mainDir, "worktree", "list", "--porcelain").out || "");
+function worktreeOf(mainDir, branch) {
+  const w = worktreesOf(mainDir).find((x) => x.branch === branch);
+  return w ? w.dir : null;
 }
 /* Plenty of dev servers ignore $PORT (Vite reads vite.config, Next reads -p),
    so the injected port is a request. Watch what the instance's process group
@@ -1655,6 +1671,37 @@ const handle = async (req, res) => {
         .filter(([, i]) => instLive(i))
         .map(([key, i]) => ({ key, svc: i.svc, branch: i.branch, port: i.port, pid: instPid(i), startedAt: i.startedAt, adopted: !i.child, externalWorktree: !!i.externalWorktree })),
     });
+
+  /* Every worktree of a service's repo, not just the ones Stackdeck is
+     running. An agent that made a worktree elsewhere needs to see that it
+     exists and whether anything is serving it — otherwise its only option is
+     to make another one. */
+  if (req.method === "GET" && url.pathname === "/api/worktrees") {
+    const s = findSvc(url.searchParams.get("name"));
+    if (!s) return json(res, 404, { error: "unknown service" });
+    const mainDir = svcDir(s);
+    const g = gitInfo(mainDir);
+    if (!g.isGit) return json(res, 400, { error: "not a git repository" });
+    const ours = path.join(DATA_HOME, "worktrees", s.name);
+    const live = Object.entries(instances).filter(([, i]) => instLive(i) && i.svc === s.name);
+    return json(res, 200, {
+      service: s.name,
+      worktrees: worktreesOf(mainDir).map((w) => {
+        const running = live.find(([, i]) => path.resolve(i.dir) === path.resolve(w.dir));
+        return {
+          ...w,
+          main: path.resolve(w.dir) === path.resolve(mainDir),
+          // Provenance, so removal can refuse what we did not create and the
+          // caller knows whose directory it is about to touch.
+          createdByStackdeck: path.resolve(w.dir).startsWith(path.resolve(ours) + path.sep),
+          running: !!running,
+          key: running ? running[0] : null,
+          port: running ? running[1].port : null,
+          pid: running ? instPid(running[1]) : null,
+        };
+      }),
+    });
+  }
 
   if (req.method === "POST" && url.pathname === "/api/worktree/start") {
     const { name, branch } = await readBody(req);
@@ -2248,4 +2295,5 @@ if (!IS_MAIN) module.exports = {
   gitBranchFast, inferCommand, detectProcs,
   // worktree heavy-directory linking
   detectEcosystems, heavyDirsFor, linkHeavyDirs, excludeLinkedDirs, humanSize, HEAVY_DIRS,
+  parseWorktreeList,
 };

@@ -253,6 +253,15 @@ function runMcp() {
       inputSchema: { type: "object", properties: { query: { type: "string", description: "optional filter over port, pid, process name and command" } } } },
     { name: "whats_on_port", description: "What is holding a specific port, if anything. Use this before starting a service that failed to bind.",
       inputSchema: { type: "object", properties: { port: { type: "number" } }, required: ["port"] } },
+    /* The capability the whole project is built around, and the one an agent
+       could not reach: it could start a service but not the parallel branch
+       it had just made a worktree for. */
+    { name: "list_worktrees", description: "Every git worktree of a service's repository, wherever it lives on disk and whatever created it — including ones you or another tool made. Says which are running under Stackdeck, on what port, and which Stackdeck created; only those can be removed by it.",
+      inputSchema: { type: "object", properties: { name: { type: "string", description: "service name" } }, required: ["name"] } },
+    { name: "start_worktree", description: "Run a branch of a service in its own git worktree, in parallel with the main checkout, on its own port. Adopts an existing worktree for that branch rather than creating a second. Heavy directories (node_modules, target, .venv) are symlinked from the main checkout, not copied.",
+      inputSchema: { type: "object", properties: { name: { type: "string", description: "service name" }, branch: { type: "string" } }, required: ["name", "branch"] } },
+    { name: "stop_worktree", description: "Stop a running worktree instance by its key (the \"service@branch\" form returned by list_worktrees or start_worktree). Stops the process; the worktree stays on disk.",
+      inputSchema: { type: "object", properties: { key: { type: "string", description: "service@branch" } }, required: ["key"] } },
     { name: "kill_pid", description: "Kill a process by pid. Only pids currently holding a listening port can be killed; the daemon's own pid and other users' processes are refused. Prefer stop_service when the pid belongs to a configured service.",
       inputSchema: { type: "object", properties: { pid: { type: "number" } }, required: ["pid"] } },
   ];
@@ -271,6 +280,31 @@ function runMcp() {
       const r = await fetch(`${BASE}/api/${ep}`, {
         method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ name: args.name, branch: args.branch }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d;
+    }
+    if (name === "list_worktrees") {
+      const r = await fetch(`${BASE}/api/worktrees?name=${encodeURIComponent(args.name)}`, { headers: authHeaders() });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.statusText);
+      return d.worktrees.map((w) => ({
+        branch: w.branch, directory: w.dir, isMainCheckout: w.main,
+        running: w.running, key: w.key, port: w.port, pid: w.pid,
+        createdByStackdeck: w.createdByStackdeck,
+        // Said outright: an agent must not assume it can clean up after a
+        // worktree somebody else is working in.
+        removable: w.createdByStackdeck && !w.main,
+        ...(w.detached ? { detached: true } : {}),
+      }));
+    }
+    if (name === "start_worktree" || name === "stop_worktree") {
+      const ep = name === "start_worktree" ? "start" : "stop";
+      const body = name === "start_worktree" ? { name: args.name, branch: args.branch } : { key: args.key };
+      const r = await fetch(`${BASE}/api/worktree/${ep}`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(body),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.statusText);

@@ -139,9 +139,10 @@ service (it normally is `http://localhost:…`) and there is nothing else.
   filter, stream logs in a split pane, plus `p` for the same port table. Same
   daemon, so the browser stays in sync.
 - **CLI and MCP** — `stackdeck status|start|stop|restart|logs|ports|kill`, plus
-  `stackdeck mcp` so coding agents can drive your dev environment themselves,
-  including `whats_on_port` so an agent stops retrying a start that can never
-  bind.
+  `stackdeck mcp` so coding agents can drive your dev environment themselves.
+  `whats_on_port` stops an agent retrying a start that can never bind, and
+  `list_worktrees` / `start_worktree` / `stop_worktree` let it run the branch
+  it just made — including a worktree it created itself, anywhere on disk.
 - **Themes** — calm, playful, austere, or a custom one built from a few
   sliders (a full light theme is one drag).
 

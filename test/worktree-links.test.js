@@ -311,3 +311,66 @@ test("the result always reports both what was linked and why the rest was not",
     // every candidate is accounted for, one way or the other
     for (const x of r.skipped) assert.ok(x.dir && x.why, `incomplete skip record: ${JSON.stringify(x)}`);
   });
+
+/* ---------- worktree discovery, whatever made them ---------- */
+
+const { parseWorktreeList } = require("../server.js");
+
+test("parseWorktreeList reads main, linked, detached and bare records", () => {
+  const out = [
+    "worktree /home/dev/app", "HEAD abc123", "branch refs/heads/main", "",
+    "worktree /home/dev/app/.claude/worktrees/agent-a", "HEAD def456", "branch refs/heads/agent-a", "",
+    "worktree /elsewhere/sibling/agent-b", "HEAD 789abc", "detached", "",
+    "worktree /home/dev/app-bare", "bare", "",
+  ].join("\n");
+  assert.deepStrictEqual(parseWorktreeList(out), [
+    { dir: "/home/dev/app", branch: "main", head: "abc123", bare: false, detached: false },
+    { dir: "/home/dev/app/.claude/worktrees/agent-a", branch: "agent-a", head: "def456", bare: false, detached: false },
+    { dir: "/elsewhere/sibling/agent-b", branch: null, head: "789abc", bare: false, detached: true },
+    { dir: "/home/dev/app-bare", branch: null, head: null, bare: true, detached: false },
+  ]);
+});
+
+test("parseWorktreeList tolerates no trailing blank line and empty input", () => {
+  assert.deepStrictEqual(parseWorktreeList("worktree /a\nHEAD z\nbranch refs/heads/b"),
+    [{ dir: "/a", branch: "b", head: "z", bare: false, detached: false }]);
+  assert.deepStrictEqual(parseWorktreeList(""), []);
+  assert.deepStrictEqual(parseWorktreeList("garbage\nmore garbage"), []);
+});
+
+test("a path with spaces survives the parse", () => {
+  // Worktrees land under "~/Library/Application Support" and the like.
+  assert.strictEqual(parseWorktreeList("worktree /Users/d/My Projects/app\nbranch refs/heads/x")[0].dir,
+    "/Users/d/My Projects/app");
+});
+
+test("worktrees in three different layouts are all discovered", { skip: !hasGit }, () => {
+  /* Every agent puts them somewhere different: nested in the repo, a sibling
+     directory, a central cache. git tracks absolute paths, so all three come
+     back from one `git worktree list` — this pins that we read all of it. */
+  const main = repo("layouts");
+  write(path.join(main, "f.txt"), "1");
+  git(main, "add", "-A"); commit(main);
+  for (const b of ["nested", "sibling", "central"]) git(main, "branch", b);
+
+  const central = tmpdir("layouts-central");
+  const sibling = tmpdir("layouts-sibling");
+  const layouts = {
+    nested: path.join(main, ".claude", "worktrees", "nested"),
+    sibling: path.join(sibling, "app-sibling"),
+    central: path.join(central, "cache", "app-central"),
+  };
+  for (const [b, dir] of Object.entries(layouts)) {
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    git(main, "worktree", "add", "-q", "--end-of-options", dir, b);
+  }
+
+  const found = parseWorktreeList(git(main, "worktree", "list", "--porcelain"));
+  for (const [b, dir] of Object.entries(layouts)) {
+    const w = found.find((x) => x.branch === b);
+    assert.ok(w, `${b} was not discovered`);
+    assert.strictEqual(fs.realpathSync(w.dir), fs.realpathSync(dir), `${b} resolved to the wrong path`);
+  }
+  assert.strictEqual(found.length, 4, "the main checkout plus three worktrees");
+  for (const dir of Object.values(layouts)) git(main, "worktree", "remove", "--force", "--end-of-options", dir);
+});
