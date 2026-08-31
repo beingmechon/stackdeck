@@ -1,0 +1,5 @@
+[tool.poetry]
+name = "svc"
+
+[tool.poetry.scripts]
+serve = "svc.cli:main"

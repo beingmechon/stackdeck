@@ -1,0 +1,10 @@
+Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+tcp4       0      0  127.0.0.1.8899         *.*                    LISTEN
+tcp46      0      0  *.3100                 *.*                    LISTEN
+tcp6       0      0  ::1.5432               *.*                    LISTEN
+tcp4       0      0  192.168.1.10.52340     140.82.113.26.443      ESTABLISHED
+tcp4       0      0  *.8000                 *.*                    LISTEN
+tcp4       0      0  127.0.0.1.8899         127.0.0.1.52341        ESTABLISHED
+Active LOCAL (UNIX) domain sockets
+Address          Type   Recv-Q Send-Q       Inode             Conn

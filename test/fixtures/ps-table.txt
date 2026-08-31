@@ -1,0 +1,5 @@
+    1     0     1 39-14:49:32  12560 /sbin/launchd
+  536     1   536 39-14:47:42   9168 /usr/libexec/logd
+  101   536   101    01:23:45  84320 node /opt/projects/orders-api/node_modules/.bin/vite --port 3000
+  202     1   202       05:12 141200 /opt/homebrew/opt/postgresql@16/bin/postgres -D /opt/homebrew/var/postgresql@16
+  303   101   101       00:09  10240 esbuild --service=0.21.5

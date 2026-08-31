@@ -1,0 +1,5 @@
+LISTEN 0      4096         127.0.0.1:3000        0.0.0.0:*    users:(("node",pid=101,fd=23))
+LISTEN 0      4096             [::1]:3000           [::]:*    users:(("node",pid=101,fd=24))
+LISTEN 0      244          127.0.0.1:5432        0.0.0.0:*    users:(("postgres",pid=202,fd=5))
+LISTEN 0      511            0.0.0.0:80          0.0.0.0:*
+LISTEN 0      128               [::]:22             [::]:*    users:(("sshd",pid=303,fd=4))

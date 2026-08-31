@@ -1141,7 +1141,10 @@ async function restartService(s) {
    arrives with one must not be able to steer a path. */
 function sanitizeBranch(branch) {
   const safe = String(branch || "").replace(/[^A-Za-z0-9._-]+/g, "-");
-  return safe === "." || safe === ".." ? "" : safe;
+  // "." and ".." traverse. A leading dash is read as an option by every
+  // command-line tool the value could ever reach. git will not create a
+  // branch with either shape, so rejecting them costs nothing real.
+  return safe === "." || safe === ".." || safe.startsWith("-") ? "" : safe;
 }
 
 function freePortFrom(base, allow) {

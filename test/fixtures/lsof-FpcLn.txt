@@ -1,0 +1,17 @@
+p101
+cnode
+Ldevuser
+f3
+n127.0.0.1:3000
+f4
+n[::1]:3000
+p202
+cpostgres
+Ldevuser
+f5
+n127.0.0.1:5432
+p303
+cdocker-proxy
+Lroot
+f6
+n*:8080
