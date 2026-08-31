@@ -12,17 +12,20 @@ what shipped rather than what was written down at the time.
 
 Nothing yet.
 
-## [0.11.1] — 2026-08-31
+## [0.11.2] — 2026-08-31
 
 ### Added
-- A Claude Code skill at `skills/stackdeck/`, shipped in the package. Tools
-  tell an agent what it *can* do; the skill tells it that `start_service`
-  already waits so a sleep loop is wrong, that a failed bind means asking
-  `whats_on_port` rather than retrying, and that it must not delete a
-  worktree another agent is working in.
-- README section on driving the board from an agent: `claude mcp add`, a
-  `.mcp.json` snippet, and the env vars for a non-default port or state dir.
-  `npx -y stackdeck mcp` needs nothing installed and starts the daemon itself.
+- Agent instructions at `skills/stackdeck/SKILL.md`, shipped in the package.
+  Tool schemas say what an agent *can* call; they cannot say that
+  `start_service` already waits for the service to be serving, so a sleep loop
+  after it is wrong, that a failed bind means asking `whats_on_port` rather
+  than retrying, or that it must not delete a worktree another agent is
+  working in. Written in the `SKILL.md` format some agents load automatically,
+  and readable as plain Markdown by anything else.
+- README section on driving the board from an agent: the MCP client config,
+  and the env vars for a non-default port or state dir. MCP is an open
+  standard, so this works with any client that speaks it; `npx -y stackdeck
+  mcp` needs nothing installed and starts the daemon itself.
 
 ## [0.11.0] — 2026-08-31
 
@@ -292,8 +295,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.11.1...HEAD
-[0.11.1]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...v0.11.1
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/beingmechon/stackdeck/compare/v0.11.0...v0.11.2
 [0.11.0]: https://github.com/beingmechon/stackdeck/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/beingmechon/stackdeck/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/beingmechon/stackdeck/compare/v0.10.1...v0.10.2

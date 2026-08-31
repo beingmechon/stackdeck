@@ -88,13 +88,10 @@ stackdeck kill 54211     # only pids holding a port; never root, never sudo
 
 The board is also an MCP server, so a coding agent can start services, read
 their logs and see what is holding a port — instead of running `npm run dev &`
-and losing the output.
+and losing the output. MCP is an open standard; this works with any client
+that speaks it.
 
-```bash
-claude mcp add stackdeck -- npx -y stackdeck mcp
-```
-
-Or in a project's `.mcp.json`, so everyone on the repo gets it:
+Point your client at:
 
 ```json
 {
@@ -104,9 +101,13 @@ Or in a project's `.mcp.json`, so everyone on the repo gets it:
 }
 ```
 
+Most clients read that from a project-level `.mcp.json` or from their own
+settings file, and several have a CLI shortcut that writes it for you — check
+your client's docs for where it wants to be told.
+
 `npx` needs nothing installed globally, and `stackdeck mcp` starts the daemon
-itself if it isn't already up. If you run the board on a non-default port or
-state directory, pass them through:
+itself if it isn't already up. On a non-default port or state directory, pass
+them through:
 
 ```json
 {
@@ -123,18 +124,21 @@ Eleven tools: `list_services`, `start_service`, `stop_service`,
 `restart_service`, `get_logs`, `list_ports`, `whats_on_port`, `kill_pid`,
 `list_worktrees`, `start_worktree`, `stop_worktree`.
 
-**The skill.** Tools tell an agent what it *can* do; they don't tell it that
-`start_service` already waits, or that it must not delete a worktree another
-agent is working in. [`skills/stackdeck/`](skills/stackdeck/SKILL.md) is a
-Claude Code skill that does:
+**Agent instructions.** Tool schemas say what an agent *can* call; they can't
+say that `start_service` already waits for the service to be serving, so a
+sleep loop after it is wrong, or that it must not delete a worktree another
+agent is working in. [`skills/stackdeck/SKILL.md`](skills/stackdeck/SKILL.md)
+says those things.
+
+It is written in the `SKILL.md` format — YAML frontmatter, then prose — which
+some agents load automatically from a skills directory:
 
 ```bash
-mkdir -p ~/.claude/skills
-cp -r "$(npm root -g)/stackdeck/skills/stackdeck" ~/.claude/skills/
+cp -r "$(npm root -g)/stackdeck/skills/stackdeck" <your-agent-skills-dir>/
 ```
 
-Drop it in `.claude/skills/` inside a project instead if you'd rather scope it
-there.
+Anything else can read it as a plain Markdown file: paste it into your agent's
+instructions, or point the agent at the path.
 
 ## It never talks to the internet
 
