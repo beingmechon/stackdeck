@@ -10,7 +10,15 @@ what shipped rather than what was written down at the time.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+- A Claude Code skill at `skills/stackdeck/`, shipped in the package. Tools
+  tell an agent what it *can* do; the skill tells it that `start_service`
+  already waits so a sleep loop is wrong, that a failed bind means asking
+  `whats_on_port` rather than retrying, and that it must not delete a
+  worktree another agent is working in.
+- README section on driving the board from an agent: `claude mcp add`, a
+  `.mcp.json` snippet, and the env vars for a non-default port or state dir.
+  `npx -y stackdeck mcp` needs nothing installed and starts the daemon itself.
 
 ## [0.11.0] — 2026-08-31
 

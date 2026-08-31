@@ -84,6 +84,58 @@ stackdeck ports 3000     # who has it, since when, and from which directory
 stackdeck kill 54211     # only pids holding a port; never root, never sudo
 ```
 
+## Using it from an agent
+
+The board is also an MCP server, so a coding agent can start services, read
+their logs and see what is holding a port — instead of running `npm run dev &`
+and losing the output.
+
+```bash
+claude mcp add stackdeck -- npx -y stackdeck mcp
+```
+
+Or in a project's `.mcp.json`, so everyone on the repo gets it:
+
+```json
+{
+  "mcpServers": {
+    "stackdeck": { "command": "npx", "args": ["-y", "stackdeck", "mcp"] }
+  }
+}
+```
+
+`npx` needs nothing installed globally, and `stackdeck mcp` starts the daemon
+itself if it isn't already up. If you run the board on a non-default port or
+state directory, pass them through:
+
+```json
+{
+  "mcpServers": {
+    "stackdeck": {
+      "command": "npx", "args": ["-y", "stackdeck", "mcp"],
+      "env": { "STACKDECK_PORT": "9000", "STACKDECK_HOME": "~/.config/stackdeck" }
+    }
+  }
+}
+```
+
+Eleven tools: `list_services`, `start_service`, `stop_service`,
+`restart_service`, `get_logs`, `list_ports`, `whats_on_port`, `kill_pid`,
+`list_worktrees`, `start_worktree`, `stop_worktree`.
+
+**The skill.** Tools tell an agent what it *can* do; they don't tell it that
+`start_service` already waits, or that it must not delete a worktree another
+agent is working in. [`skills/stackdeck/`](skills/stackdeck/SKILL.md) is a
+Claude Code skill that does:
+
+```bash
+mkdir -p ~/.claude/skills
+cp -r "$(npm root -g)/stackdeck/skills/stackdeck" ~/.claude/skills/
+```
+
+Drop it in `.claude/skills/` inside a project instead if you'd rather scope it
+there.
+
 ## It never talks to the internet
 
 No telemetry, no analytics, no update checks, no accounts, no CDN. The page

@@ -15,7 +15,8 @@
     "index.html",
     "bin/",
     "scripts/macos-app.sh",
-    "scripts/Stackdeck.icns"
+    "scripts/Stackdeck.icns",
+    "skills/"
   ],
   "scripts": {
     "start": "node server.js",
