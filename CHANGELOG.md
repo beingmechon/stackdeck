@@ -12,6 +12,16 @@ what shipped rather than what was written down at the time.
 
 Nothing yet.
 
+## [0.10.2] — 2026-08-31
+
+### Changed
+- The package description, the landing page and the README now say the same
+  thing: Stackdeck runs two branches of one repo side by side. npm carries
+  the description from the published tarball, so this needed a release of its
+  own to reach the registry.
+- The WSL2 support statement moved out of a collapsed section in the README
+  and into Install, next to the Node and platform requirements.
+
 ## [0.10.1] — 2026-08-31
 
 ### Added
@@ -232,7 +242,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/beingmechon/stackdeck/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/beingmechon/stackdeck/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/beingmechon/stackdeck/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/beingmechon/stackdeck/compare/v0.9.1...v0.9.2
