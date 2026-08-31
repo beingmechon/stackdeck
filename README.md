@@ -77,11 +77,15 @@ stackdeck kill 54211     # only pids holding a port; never root, never sudo
 <details>
 <summary><b>Everything else</b> — the full feature list</summary>
 
-- **Worktrees that don't cost a gigabyte** — a branch symlinks `node_modules`,
-  `target`, `.venv` and friends back at your main checkout instead of copying,
-  picked from the ecosystems the repo actually is. Never anything git tracks,
-  never over something already there; linked names go into `.git/info/exclude`
-  so the worktree stays clean. `linkDirs: [...]` overrides, `false` disables.
+- **Worktrees that don't cost a gigabyte** — ⚠️ **experimental**. A branch
+  symlinks `node_modules`, `target`, `.venv` and friends back at your main
+  checkout instead of copying, picked from the ecosystems the repo actually is.
+  Never anything git tracks, never over something already there. It **appends
+  the linked names to `.git/info/exclude`** — a real file in your repo, though
+  one git never commits — because a `.gitignore` written `node_modules/` does
+  not match a symlink, and the worktree would otherwise show it as untracked.
+  Also new, also unused by anyone but me. `linkDirs: [...]` overrides the
+  detected list, `false` turns it off entirely.
 - **A branch can have its own database** — ⚠️ **experimental**. `isolateDb`
   copies the dev Postgres database per worktree (`CREATE DATABASE … TEMPLATE`)
   and rewrites the URL, so an agent's migration can't corrupt your main
@@ -91,6 +95,10 @@ stackdeck kill 54211     # only pids holding a port; never root, never sudo
   driven it against a live Postgres 15 and it behaves, but that is one machine,
   one schema and one afternoon. Try it on something you can afford to lose
   first, and take a dump before you rely on it. Off unless you set it.
+- **Removing a worktree deletes its directory** — that is what
+  `git worktree remove --force` does, and it is not recoverable. Stackdeck
+  refuses outright for a worktree it did not create: it drops that one from the
+  board and leaves it on disk, because it may be somewhere an agent is working.
 - **Honest status** — running state comes from pid *and* port. Services you
   started elsewhere show as `external`; killing something a supervisor restarts
   says so rather than pretending; killing the daemon leaves your services up
@@ -211,9 +219,9 @@ next to it.
       "group": "Stack A",
       "dependsOn": ["db"],                     // started (and ready) first
       "readyWhen": { "log": "Listening on" },  // or { "http": "…" }; default: port opens
-      "linkDirs": ["node_modules"],            // symlink into a worktree instead
-                                               // of copying; omit to detect,
-                                               // false to disable
+      "linkDirs": ["node_modules"],            // EXPERIMENTAL — symlinks into a
+                                               // worktree instead of copying;
+                                               // omit to detect, false to disable
       "isolateDb": true,                       // EXPERIMENTAL — creates and drops
                                                // real Postgres databases; see
                                                // the feature list before using

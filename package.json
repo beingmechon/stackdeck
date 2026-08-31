@@ -1,6 +1,6 @@
 {
   "name": "stackdeck",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "description": "Your agent made four worktrees. Stackdeck runs them: starts, supervises, streams logs, shows every port on the machine, and drives it all over MCP. A browser and terminal board for local dev services — zero dependencies, never leaves 127.0.0.1.",
   "license": "MIT",
   "author": "beingmechon",

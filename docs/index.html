@@ -356,7 +356,7 @@
             be serving rather than merely spawned.</p>
           <p>A worktree costs a checkout, not a gigabyte: <code>node_modules</code>,
             <code>target</code> and <code>.venv</code> are symlinked back at the main checkout
-            rather than copied, and never anything git tracks. With <code>isolateDb</code> — which is
+            rather than copied, and never anything git tracks — <b>experimental, and new</b>. With <code>isolateDb</code> — which is
             <b>experimental, creates and drops real databases, and nobody has used it in anger
             yet</b> — the branch gets its own copy of the Postgres database too, so an agent's
             migration cannot reach your main checkout's data.</p>

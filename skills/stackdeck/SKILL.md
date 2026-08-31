@@ -74,6 +74,13 @@ own port — so the main copy keeps running. Heavy directories
 rather than copied, so a second worktree costs a checkout, not a gigabyte.
 Like `start_service`, it waits until the branch is actually serving.
 
+**Two things here are experimental and new.** The symlinking writes into the
+worktree and appends to `.git/info/exclude`. If the service has `isolateDb`
+set, starting the worktree also **creates a real Postgres database**, and
+removing the worktree drops it. Neither has been used by anyone in anger. If
+the user has not asked for a worktree specifically, say what will happen
+before you start one.
+
 The reply carries `key` (the `service@branch` form) and `port`. Use the key
 with `stop_worktree`.
 

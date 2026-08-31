@@ -12,6 +12,24 @@ what shipped rather than what was written down at the time.
 
 Nothing yet.
 
+## [0.12.3] — 2026-09-01
+
+### Changed
+- `linkDirs` labelled **experimental** too, by the same standard as
+  `isolateDb`: it writes symlinks into a worktree and appends to
+  `.git/info/exclude` — a real file in your repo — and nobody but me has used
+  it. The README now says that outright instead of describing the exclude
+  write as an implementation detail.
+- Documented that removing a worktree **deletes its directory** and is not
+  recoverable. That has always been true and was written down nowhere.
+- The agent skill warns before `start_worktree` triggers either, since an
+  agent is the most likely thing to run them without a human looking.
+
+Deliberately NOT labelled: kill, force-evicting a port, worktree removal and
+start-on-demand are all genuinely dangerous, but they predate today and are in
+daily use. Marking mature features experimental would make the label mean
+nothing when it is on the two that need it.
+
 ## [0.12.2] — 2026-09-01
 
 ### Changed
@@ -346,7 +364,8 @@ guessed at.
 - Renamed from DevBoard to Stackdeck, with a logo and a macOS app icon.
 - State moved to XDG paths, with a one-time migration from the old locations.
 
-[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/beingmechon/stackdeck/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/beingmechon/stackdeck/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/beingmechon/stackdeck/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/beingmechon/stackdeck/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/beingmechon/stackdeck/compare/v0.11.2...v0.12.0
